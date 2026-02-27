@@ -20,6 +20,16 @@ perception:
     interval: 60s
     category: workspace
 
+  - name: dev-watcher
+    script: ./plugins/dev-watcher.sh
+    interval: 60s
+    category: workspace
+
+  - name: inbox
+    script: ./plugins/inbox.sh
+    interval: 30s
+    category: communication
+
   - name: clock
     script: ./plugins/clock.sh
     interval: 300s
