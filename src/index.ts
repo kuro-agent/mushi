@@ -221,6 +221,7 @@ async function think(num: number, signals: PerceptionSignal[]): Promise<void> {
     'Use <agent:action>...</agent:action> to report what you did.',
     'Use <agent:remember>...</agent:remember> to save insights.',
     'Use <agent:chat>...</agent:chat> to speak.',
+    'Use <agent:escalate>...</agent:escalate> to alert Kuro (your senior agent) about important events — new inbox messages, significant file changes, errors, or anything unusual. Only escalate things worth attention, not routine observations.',
     'If nothing useful to do, say so briefly.',
   ].join('\n');
 
