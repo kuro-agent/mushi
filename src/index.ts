@@ -15,7 +15,7 @@ import { parse as parseYaml } from 'yaml';
 
 import type { AgentConfig, PerceptionSignal, Message } from './types.js';
 import { parseInterval, estimateTokens, truncateToTokens, log } from './utils.js';
-import { perceive } from './perception.js';
+import { perceive, runPlugin } from './perception.js';
 import { callModel } from './model.js';
 import { parseTags, dispatch } from './dispatcher.js';
 import { startServer } from './server.js';
@@ -353,6 +353,17 @@ async function main(): Promise<void> {
     log(agentDir, 'sense', `#${senseCount} → think #${thinkCount} (triggers: ${triggers || 'bootstrap'})`);
 
     await think(thinkCount, signals);
+
+    // Settle: re-run trigger plugins to absorb self-caused changes
+    // (e.g., think wrote MEMORY.md → dev-watcher would detect it next cycle)
+    // By re-running now, the new state becomes the cached baseline.
+    for (const plugin of config.perception) {
+      if (plugin.trigger) {
+        perceptionCache.delete(plugin.name);
+        runPlugin(plugin, agentDir, perceptionCache);
+      }
+    }
+
     await sleep(senseInterval);
   }
 }
