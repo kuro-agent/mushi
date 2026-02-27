@@ -354,16 +354,20 @@ async function main(): Promise<void> {
 
     await think(thinkCount, signals);
 
-    // Settle: re-run trigger plugins to absorb self-caused changes
-    // (e.g., think wrote MEMORY.md → dev-watcher would detect it next cycle)
-    // By re-running now, the new state becomes the cached baseline.
-    // NOTE: Don't delete cache — force re-run by resetting lastRun instead.
-    // Deleting cache makes runPlugin treat it as first-run (always signal).
+    // Settle: re-run trigger plugins to establish post-think baseline.
+    // Purpose: absorb self-caused changes (e.g., think wrote MEMORY.md).
+    // After settle, the cached state IS the baseline — force changed=false.
     for (const plugin of config.perception) {
       if (plugin.trigger) {
         const cached = perceptionCache.get(plugin.name);
-        if (cached) cached.lastRun = 0; // force cache expiry → re-run with comparison
+        if (cached) cached.lastRun = 0; // force re-run
         runPlugin(plugin, agentDir, perceptionCache);
+        // Force baseline: settle absorbs the current state as "unchanged"
+        const settled = perceptionCache.get(plugin.name);
+        if (settled) {
+          settled.changed = false;
+          settled.signalStrength = 'noise';
+        }
       }
     }
 
