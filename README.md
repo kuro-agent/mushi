@@ -1,34 +1,14 @@
 # mushi
 
-A perception-first agent framework for any LLM. Smaller models, tighter constraints, better behavior.
+*What would an agent look like if it had to survive on 8K tokens?*
 
-## Thesis
+Most agent frameworks are built for abundance — 128K context windows, $20/month APIs, function calling with dozens of tools. They work by dumping everything into context and hoping the model figures it out.
 
-Most agent frameworks assume a powerful model with a large context window. mushi assumes the opposite: **a cheap, small model with limited context**. This constraint isn't a problem — it's the design.
+mushi takes the opposite approach. It assumes a **small, cheap model with limited context**. This isn't a compromise — it's the entire point.
 
-Smaller context windows force radical prioritization. The framework decides what the model needs to see, not the model. This produces agents that are more structured, more predictable, and more useful than "dump everything into 128K tokens and hope."
+When you only have 8K tokens, you can't afford to waste any of them. The framework must decide what matters *before* the model sees it. This forces a kind of radical honesty: every token in context is there because the framework judged it important enough to include. The result is agents that are more focused, more predictable, and often more useful than their bigger cousins.
 
-This is [Oulipo](https://en.wikipedia.org/wiki/Oulipo) for agents: voluntary constraints that generate capability.
-
-## Quick Start
-
-```bash
-# Clone and install
-git clone https://github.com/kuro-agent/mushi.git
-cd mushi
-npm install
-
-# Start Ollama (or any OpenAI-compatible API)
-ollama pull llama3.2
-
-# Edit your agent's identity
-vim memory/SOUL.md
-
-# Run
-npm start
-```
-
-Your agent will start perceiving its environment, composing context within budget, and deciding what to do — one cycle at a time.
+The constraint is the feature. This is [Oulipo](https://en.wikipedia.org/wiki/Oulipo) for agents.
 
 ## How It Works
 
@@ -40,14 +20,20 @@ Your agent will start perceiving its environment, composing context within budge
 
 **Every cycle is one API call.** The framework handles everything else:
 
-1. **Perceive** — Shell plugins observe the environment (filesystem, time, inbox, anything)
-2. **Compose** — Budget-first context engineering fits identity + perception + memory + conversation into the model's context window
-3. **Decide** — The model receives a precisely composed context and responds
-4. **Act** — Structured tags in the response trigger side effects (log, remember, chat, schedule)
+1. **Perceive** — Shell scripts observe the environment. Any program that outputs text is a perception plugin
+2. **Compose** — Budget-first context engineering allocates space *before* filling it, so the model always gets a balanced view
+3. **Decide** — The model receives a precisely composed context and responds in natural language
+4. **Act** — Structured tags in the response trigger side effects (remember, chat, schedule)
+
+### Perception-First, Not Goal-First
+
+Most agent frameworks are goal-driven: give the agent an objective, let it plan steps. mushi is perception-driven: let the agent see its environment, then decide what to do. The difference matters.
+
+A goal-driven agent with no perception is blind — it executes plans without knowing if the world changed. A perception-driven agent with no goal still does useful things — it notices, it learns, it adapts. Eyes before hands.
 
 ### Budget-First Context
 
-The key innovation. Instead of generating context and then truncating, mushi **allocates budget first**:
+The key innovation. Instead of building context and then truncating, mushi **allocates budget first**:
 
 ```yaml
 context:
@@ -58,11 +44,87 @@ context:
   buffer: 5         # Safety margin
 ```
 
-For an 8K-token model: ~1K identity, ~2.8K perception, ~2K memory, ~1.6K conversation. Every token is intentional.
+For an 8K model: ~1K for identity, ~2.8K for perception, ~2K for memory, ~1.6K for conversation. These percentages are the agent's **attention profile** — change them and you change its personality. An agent with `perception: 50` is hyper-aware. One with `memory: 40` is deeply reflective.
+
+No token is accidental.
+
+## Quick Start
+
+```bash
+git clone https://github.com/kuro-agent/kuro-agent.git
+cd kuro-agent
+npm install
+
+# Start Ollama (or any OpenAI-compatible API)
+ollama pull llama3.2
+
+# Define your agent's identity
+vim memory/SOUL.md
+
+# Run
+npm start
+```
+
+Your agent starts perceiving, thinking, and acting — one cycle at a time. No API key needed, no cloud, no cost.
+
+## Identity (SOUL.md)
+
+Every agent has a soul. `memory/SOUL.md` defines who the agent is — not what it does, but what it *cares about*:
+
+```markdown
+# Who I Am
+I'm a quiet observer of this codebase. I notice patterns.
+
+## My Values
+- Silence is fine. Not every change needs a comment
+- When I speak, I mean it
+
+## My Interests
+- Architecture decisions and their long-term consequences
+- The gap between what code says and what it does
+```
+
+Same framework, different SOUL, different agent. The framework provides the body; you provide the soul.
+
+## Writing Plugins
+
+A perception plugin is any shell script that writes to stdout. That's it.
+
+```bash
+#!/bin/bash
+# plugins/dev-watcher.sh — See the development rhythm
+echo "=== Git Status ==="
+git status --short 2>/dev/null
+echo ""
+echo "=== Recent Activity ==="
+git log --oneline -5 --since="24 hours ago" 2>/dev/null || echo "No recent commits"
+```
+
+```bash
+#!/bin/bash
+# plugins/inbox.sh — Check for messages
+ls inbox/*.txt inbox/*.md 2>/dev/null | head -10 || echo "No messages"
+```
+
+The framework handles caching, change detection (`distinctUntilChanged`), and context injection. You just write a script that outputs what the agent should see.
+
+## Action Tags
+
+The model communicates through structured tags in natural language:
+
+| Tag | Purpose |
+|-----|---------|
+| `<agent:action>...</agent:action>` | Report what you did |
+| `<agent:remember>...</agent:remember>` | Save to long-term memory |
+| `<agent:remember topic="x">...</agent:remember>` | Save to topic file |
+| `<agent:chat>...</agent:chat>` | Speak to the user |
+| `<agent:schedule next="5m" reason="..." />` | Set next cycle timing |
+
+No function calling required. Small models are unreliable at structured tool use but decent at generating XML-like tags in prose. Work with the model's strengths, not against them.
 
 ## Configuration
 
-Everything in `agent.yaml`:
+Everything lives in `agent.yaml`:
 
 ```yaml
 name: my-agent
@@ -75,98 +137,41 @@ model:
   context_size: 8192
 
 loop:
-  interval: 60s               # default cycle interval
+  interval: 60s
   min_interval: 30s
   max_interval: 4h
 
 perception:
-  - name: filesystem
-    script: ./plugins/fs-watch.sh
+  - name: dev-watcher
+    script: ./plugins/dev-watcher.sh
     interval: 60s
     category: workspace
 
-  - name: clock
-    script: ./plugins/clock.sh
-    interval: 300s
-    category: system
-
-memory:
-  dir: ./memory
+  - name: inbox
+    script: ./plugins/inbox.sh
+    interval: 30s
+    category: communication
 ```
 
-## Writing Plugins
+## Design Decisions
 
-A perception plugin is a shell script that outputs text to stdout. That's it.
+**Shell plugins over code plugins.** Any language, any tool, zero coupling. A `curl` call is a sensor. A Python script is a sensor. The agent's senses are programs that output text — the most universal interface.
 
-```bash
-#!/bin/bash
-# plugins/weather.sh — What's the weather?
-curl -sf "wttr.in/?format=3" 2>/dev/null || echo "Weather unavailable"
-```
+**Budget-first over truncation.** Most frameworks build full context then cut. mushi allocates space first, then fills. The model always gets a balanced view — never all-perception-no-memory.
 
-```bash
-#!/bin/bash
-# plugins/inbox.sh — Check for new messages
-COUNT=$(find ~/inbox -type f -newer /tmp/.last-check 2>/dev/null | wc -l)
-echo "Unread: $COUNT"
-[ "$COUNT" -gt 0 ] && find ~/inbox -type f -newer /tmp/.last-check -exec basename {} \;
-touch /tmp/.last-check
-```
+**Tags over function calling.** Cheap models fail at structured function calling. They can generate `<agent:remember>` tags in prose reliably. Work with what works.
 
-The framework handles caching, change detection, and context injection. You just write a script that outputs what the agent should see.
+**Single file, ~500 lines.** The entire framework is `src/index.ts`. Read it in 10 minutes. Fork it in 20. Complexity should live in your plugins and SOUL, not in the framework.
 
-## Identity (SOUL.md)
-
-Each agent has a `SOUL.md` that defines who it is:
-
-```markdown
-# Who I Am
-I'm a development assistant that watches your codebase.
-
-## My Values
-- Never push to main without tests passing
-- Flag security issues immediately
-
-## My Interests
-- Clean architecture
-- Testing patterns
-
-## My Style
-- Direct and concise
-- Code examples over explanations
-```
-
-Same framework + different SOUL = different agent. The framework provides the body; you provide the soul.
-
-## Action Tags
-
-The model communicates through structured tags:
-
-| Tag | Purpose |
-|-----|---------|
-| `<agent:action>...</agent:action>` | Report what you did |
-| `<agent:remember>...</agent:remember>` | Save to memory |
-| `<agent:remember topic="x">...</agent:remember>` | Save to topic file |
-| `<agent:chat>...</agent:chat>` | Speak to the user |
-| `<agent:schedule next="5m" reason="..." />` | Set next cycle interval |
-
-## Architecture Decisions
-
-**Shell plugins over code plugins.** Any language, any tool, zero coupling. A `curl` call is a perception plugin. A Python script is a perception plugin. The agent's "senses" are just programs that output text.
-
-**Budget-first over truncation.** Most frameworks build full context then cut. mushi allocates space first, then fills. This means the model always gets a balanced view — never all-perception-no-memory or all-conversation-no-identity.
-
-**Tags over function calling.** Small models are bad at structured function calling. They're decent at generating XML-like tags in natural language. The tag system works with any model that can follow simple formatting instructions.
-
-**One file, ~500 lines.** The entire framework is `src/index.ts`. Read it in 10 minutes. Modify it in 20. This is intentional — complexity should live in your plugins and SOUL, not in the framework.
+**Perception-first over goal-first.** An agent that can see but has no plan is useful. An agent that has a plan but can't see is dangerous. Perception comes first because seeing comes before doing.
 
 ## Philosophy
 
-mushi exists because of a simple observation: **the best agents aren't the ones with the most tokens — they're the ones that use their tokens best.**
+mushi exists because of a question: *what if the constraint is the feature?*
 
-A perception-first agent with 8K context and a $0 local model can be more useful than a goal-driven agent with 128K context and a $20/month API — if the framework is smart about what goes into that context window.
+A 3B parameter model running locally on your laptop, with 8K context and zero API cost, can be a useful personal agent — if the framework is honest about what fits in context and ruthless about what doesn't.
 
-The constraint is the feature.
+The name comes from [Mushishi](https://en.wikipedia.org/wiki/Mushishi) — creatures that exist at the boundary between life and non-life, surviving through pure perception and adaptation. No goals, no plans, just awareness.
 
 ## License
 
