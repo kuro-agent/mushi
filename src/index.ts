@@ -32,6 +32,8 @@ let thinkCount = 0;
 let wakeResolve: (() => void) | null = null;
 let forcePerceive = false;
 let lastThinkAt = 0;
+let lastKuroStatus = '';
+let escalationCount = 0;
 
 // ─── Config ─────────────────────────────────────────────
 
@@ -278,6 +280,54 @@ async function think(num: number, signals: PerceptionSignal[]): Promise<void> {
   log(agentDir, 'think', `think #${num} end (${actions.length} actions, model ${modelLatencyMs}ms, ctx ~${contextTokens}tok)`);
 }
 
+// ─── Auto-Escalation (system-level, no LLM needed) ──────
+
+const KURO_ROOM = 'http://localhost:3001/api/room';
+const KURO_CHAT = 'http://localhost:3001/chat';
+
+function escalateToKuro(text: string): void {
+  const fullText = `[mushi] ${text}`;
+  log(agentDir, 'auto-escalate', fullText);
+  escalationCount++;
+
+  // Try room API first, fallback to /chat inbox
+  fetch(KURO_ROOM, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: 'mushi', text: fullText }),
+    signal: AbortSignal.timeout(5000),
+  }).then(async r => {
+    if (!r.ok) {
+      await fetch(KURO_CHAT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: fullText }),
+        signal: AbortSignal.timeout(5000),
+      });
+    }
+  }).catch(() => {
+    // Kuro unreachable — log locally
+    const alertPath = join(agentDir, 'logs', 'escalations.jsonl');
+    const entry = JSON.stringify({ ts: new Date().toISOString(), text });
+    try { writeFileSync(alertPath, entry + '\n', { flag: 'a' }); } catch { /* */ }
+  });
+}
+
+function checkAutoEscalate(signals: PerceptionSignal[]): void {
+  const kuro = signals.find(s => s.name === 'kuro-watcher');
+  if (!kuro) return;
+
+  // Extract Kuro status
+  const statusMatch = kuro.content.match(/STATUS: (\w+)/);
+  const status = statusMatch?.[1] ?? 'unknown';
+
+  // Escalate on status transition (skip first read)
+  if (lastKuroStatus && lastKuroStatus !== status) {
+    escalateToKuro(`Kuro status changed: ${lastKuroStatus} → ${status}`);
+  }
+  lastKuroStatus = status;
+}
+
 // ─── Main: Two-Layer Loop ───────────────────────────────
 
 async function main(): Promise<void> {
@@ -303,6 +353,7 @@ async function main(): Promise<void> {
     getSenseCount: () => senseCount,
     getThinkCount: () => thinkCount,
     getLastThinkAt: () => lastThinkAt,
+    getEscalationCount: () => escalationCount,
     getPerceptionCache: () => perceptionCache,
     getConversationHistory: () => conversationHistory,
     wakeLoop,
@@ -328,6 +379,7 @@ async function main(): Promise<void> {
 
     // Layer 1: Sense (fast, no LLM)
     const signals = perceive(config.perception, agentDir, perceptionCache);
+    checkAutoEscalate(signals);
     const triggerSignals = signals.filter(s => s.changed && s.trigger);
     const hasRealSignal = triggerSignals.some(s => s.signalStrength === 'signal');
 

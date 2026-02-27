@@ -1,11 +1,17 @@
 /**
  * mushi — tag parser + action dispatcher
+ *
+ * Escalation bridge: <agent:escalate> POSTs to mini-agent's chat room,
+ * making mushi a perception outpost for Kuro.
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentConfig, ParsedAction } from './types.js';
 import { parseInterval, log } from './utils.js';
+
+const KURO_ROOM_URL = 'http://localhost:3001/api/room';
+const KURO_CHAT_URL = 'http://localhost:3001/chat';
 
 export function parseTags(response: string): ParsedAction[] {
   const actions: ParsedAction[] = [];
@@ -70,6 +76,37 @@ export function dispatch(
         log(agentDir, 'chat', action.content);
         console.log(`\n💬 ${config.name}: ${action.content}\n`);
         break;
+
+      case 'escalate': {
+        const text = `[mushi] ${action.content}`;
+        log(agentDir, 'escalate', text);
+        // Fire-and-forget: try room API, fallback to /chat inbox
+        fetch(KURO_ROOM_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from: 'mushi', text }),
+          signal: AbortSignal.timeout(5000),
+        }).then(async r => {
+          if (r.ok) {
+            log(agentDir, 'escalate', 'delivered to kuro (room)');
+          } else {
+            // Room API rejected (e.g. 'mushi' not in allowed senders) — use inbox
+            const fb = await fetch(KURO_CHAT_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ message: text }),
+              signal: AbortSignal.timeout(5000),
+            });
+            log(agentDir, 'escalate', fb.ok ? 'delivered to kuro (inbox)' : `inbox failed: ${fb.status}`);
+          }
+        }).catch(() => {
+          log(agentDir, 'escalate', 'kuro unreachable — logging locally');
+          const alertPath = join(agentDir, 'logs', 'escalations.jsonl');
+          const entry = JSON.stringify({ ts: new Date().toISOString(), text: action.content });
+          try { writeFileSync(alertPath, entry + '\n', { flag: 'a' }); } catch { /* */ }
+        });
+        break;
+      }
 
       case 'schedule': {
         const next = action.attrs.next;

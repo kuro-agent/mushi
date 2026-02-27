@@ -15,6 +15,7 @@ export interface ServerDeps {
   getSenseCount: () => number;
   getThinkCount: () => number;
   getLastThinkAt: () => number;
+  getEscalationCount: () => number;
   getPerceptionCache: () => Map<string, PerceptionSignal>;
   getConversationHistory: () => Message[];
   wakeLoop: () => void;
@@ -57,6 +58,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         uptime: Math.floor((Date.now() - startTime) / 1000),
         senses: deps.getSenseCount(),
         thinks: deps.getThinkCount(),
+        escalations: deps.getEscalationCount(),
         lastThinkAt: lastThink ? new Date(lastThink).toISOString() : null,
         lastThinkAgo: lastThink ? Math.floor((Date.now() - lastThink) / 1000) : null,
       });

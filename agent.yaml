@@ -35,6 +35,13 @@ perception:
     category: communication
     trigger: true
 
+  - name: kuro-watcher
+    script: ./plugins/kuro-watcher.sh
+    interval: 30s
+    category: sentinel
+    trigger: true
+    strip_pattern: "\\d+s|Active task: \\d+"
+
   - name: clock
     script: ./plugins/clock.sh
     interval: 300s
