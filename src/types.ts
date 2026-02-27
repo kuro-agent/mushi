@@ -31,6 +31,8 @@ export interface PerceptionPlugin {
   script: string;
   interval: string;
   category: string;
+  trigger?: boolean;         // can this plugin wake the LLM? default: false
+  strip_pattern?: string;    // regex to strip before hashing (noise reduction)
 }
 
 export interface ContextBudget {
@@ -47,6 +49,7 @@ export interface PerceptionSignal {
   content: string;
   hash: string;
   changed: boolean;
+  trigger: boolean;          // propagated from plugin config
   lastRun: number;
 }
 

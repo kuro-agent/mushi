@@ -36,7 +36,16 @@ export function runPlugin(
     log(agentDir, 'perception', `plugin ${plugin.name} failed`);
   }
 
-  const hash = simpleHash(content);
+  // Noise reduction: strip volatile patterns before hashing
+  let hashContent = content;
+  if (plugin.strip_pattern) {
+    try {
+      const re = new RegExp(plugin.strip_pattern, 'g');
+      hashContent = content.replace(re, '');
+    } catch { /* invalid regex, use raw */ }
+  }
+
+  const hash = simpleHash(hashContent);
   const changed = !cached || cached.hash !== hash;
 
   const signal: PerceptionSignal = {
@@ -45,6 +54,7 @@ export function runPlugin(
     content,
     hash,
     changed,
+    trigger: plugin.trigger ?? false,
     lastRun: now,
   };
 

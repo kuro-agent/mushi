@@ -200,21 +200,39 @@ async function cycle(num: number): Promise<number | undefined> {
 
   const signals = perceive(config.perception, agentDir, perceptionCache);
   const changedCount = signals.filter(s => s.changed).length;
-  log(agentDir, 'perceive', `${signals.length} plugins, ${changedCount} changed`);
+  const triggerCount = signals.filter(s => s.changed && s.trigger).length;
+  log(agentDir, 'perceive', `${signals.length} plugins, ${changedCount} changed, ${triggerCount} triggers`);
 
-  // L0: Skip LLM call if nothing changed — saves ~10s per no-op cycle
+  // ─── Two-Layer Perception Gate ─────────────────────────
+  // L0: Nothing changed at all → skip
   if (changedCount === 0 && num > 1) {
     lastCycleAt = Date.now();
-    log(agentDir, 'loop', `cycle #${num} skip — no perception changes`);
+    log(agentDir, 'loop', `cycle #${num} L0-skip — no perception changes`);
     writeMetrics({
       cycle: num, ts: new Date().toISOString(), model: config.model.model,
       durationMs: Date.now() - cycleStart, modelLatencyMs: 0,
       contextTokens: 0, perceptionTotal: signals.length, perceptionChanged: 0,
-      actions: { skip: 1 }, memoryEntries: countMemoryEntries(),
+      actions: { 'l0-skip': 1 }, memoryEntries: countMemoryEntries(),
       scheduledNext: null, responseLength: 0,
     });
     return undefined;
   }
+
+  // L1: Changes exist but no trigger signals — noise filtered
+  if (triggerCount === 0 && num > 1) {
+    lastCycleAt = Date.now();
+    log(agentDir, 'loop', `cycle #${num} L1-skip — ${changedCount} changes but no trigger signals`);
+    writeMetrics({
+      cycle: num, ts: new Date().toISOString(), model: config.model.model,
+      durationMs: Date.now() - cycleStart, modelLatencyMs: 0,
+      contextTokens: 0, perceptionTotal: signals.length, perceptionChanged: changedCount,
+      actions: { 'l1-skip': 1 }, memoryEntries: countMemoryEntries(),
+      scheduledNext: null, responseLength: 0,
+    });
+    return undefined;
+  }
+
+  // L2: Meaningful trigger signal → call LLM
 
   const context = composeContext(signals);
   const contextTokens = estimateTokens(context);

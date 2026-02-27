@@ -26,13 +26,13 @@ if [ -d "$DIR/.git" ]; then
 
   # Recent commit velocity (last 24h)
   commits_24h=$(git -C "$DIR" log --oneline --since="24 hours ago" 2>/dev/null | wc -l | tr -d ' ')
-  last_commit=$(git -C "$DIR" log -1 --format="%ar" 2>/dev/null)
+  last_commit=$(LANG=C git -C "$DIR" log -1 --format="%ar" 2>/dev/null)
   echo "Commits (24h): $commits_24h | Last: ${last_commit:-never}"
 
   # Active branch + how old
   branch=$(git -C "$DIR" branch --show-current 2>/dev/null)
   if [ -n "$branch" ] && [ "$branch" != "main" ] && [ "$branch" != "master" ]; then
-    branch_age=$(git -C "$DIR" log main.."$branch" --format="%ar" 2>/dev/null | tail -1)
+    branch_age=$(LANG=C git -C "$DIR" log main.."$branch" --format="%ar" 2>/dev/null | tail -1)
     echo "Branch: $branch (since ${branch_age:-unknown})"
   fi
 fi
