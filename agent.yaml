@@ -45,3 +45,6 @@ context:
 
 memory:
   dir: ./memory
+
+server:
+  port: 3000                    # HTTP API for interaction
