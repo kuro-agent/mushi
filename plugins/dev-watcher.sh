@@ -6,8 +6,8 @@ DIR="${AGENT_DIR:-.}"
 
 # --- Uncommitted work ---
 if [ -d "$DIR/.git" ]; then
-  staged=$(git -C "$DIR" diff --cached --stat 2>/dev/null | tail -1)
-  unstaged=$(git -C "$DIR" diff --stat 2>/dev/null | tail -1)
+  staged=$(git -C "$DIR" diff --cached --stat -- ':!memory/' ':!logs/' 2>/dev/null | tail -1)
+  unstaged=$(git -C "$DIR" diff --stat -- ':!memory/' ':!logs/' 2>/dev/null | tail -1)
   untracked=$(git -C "$DIR" ls-files --others --exclude-standard 2>/dev/null | wc -l | tr -d ' ')
 
   echo "=== Git Status ==="
