@@ -78,7 +78,14 @@ export function dispatch(
         break;
 
       case 'escalate': {
-        const text = `[mushi] ${action.content}`;
+        // Quality gate: filter meaningless escalations
+        const raw = action.content.replace(/<agent:\w+[^>]*>[\s\S]*?<\/agent:\w+>/g, '').trim();
+        const NOISE = /\b(no\s+change|unchanged|no\s+significant|nothing\s+(new|unusual|to\s+report)|filesystem\s+unchanged)\b/i;
+        if (!raw || raw.length < 10 || NOISE.test(raw)) {
+          log(agentDir, 'escalate', `filtered (noise): ${raw.slice(0, 60)}`);
+          break;
+        }
+        const text = `[mushi] ${raw}`;
         log(agentDir, 'escalate', text);
         // Fire-and-forget: try room API, fallback to /chat inbox
         fetch(KURO_ROOM_URL, {
