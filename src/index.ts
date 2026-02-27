@@ -6,12 +6,13 @@
  * which produces more structured, useful behavior.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
-// ─── Types ───────────────────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────
 
 interface AgentConfig {
   name: string;
@@ -21,6 +22,7 @@ interface AgentConfig {
   perception: PerceptionPlugin[];
   context: ContextBudget;
   memory: { dir: string };
+  server?: { port: number };
 }
 
 interface ModelConfig {
@@ -65,7 +67,7 @@ interface Message {
   content: string;
 }
 
-// ─── Utilities ───────────────────────────────────────────────
+// ─── Utilities ───────────────────────────────────────────
 
 function simpleHash(str: string): string {
   let hash = 0;
@@ -91,7 +93,6 @@ function log(tag: string, msg: string): void {
   const ts = new Date().toISOString();
   const line = `[${ts}] [${tag}] ${msg}`;
   console.log(line);
-  // Append to behavior log
   try {
     const logDir = join(agentDir, 'logs');
     if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
@@ -100,32 +101,33 @@ function log(tag: string, msg: string): void {
 }
 
 function estimateTokens(text: string): number {
-  // Rough estimate: ~4 chars per token for English, ~2 for CJK
   return Math.ceil(text.length / 3.5);
 }
 
-// ─── Globals ─────────────────────────────────────────────────
+// ─── Globals ─────────────────────────────────────────────
 
 let agentDir = process.cwd();
 let config: AgentConfig;
 const perceptionCache = new Map<string, PerceptionSignal>();
 const conversationHistory: Message[] = [];
+let startTime = Date.now();
+let cycleCount = 0;
+let wakeResolve: (() => void) | null = null;
 
-// ─── Config ──────────────────────────────────────────────────
+// ─── Config ──────────────────────────────────────────────
 
 function loadConfig(configPath: string): AgentConfig {
   const raw = readFileSync(configPath, 'utf-8');
   return parseYaml(raw) as AgentConfig;
 }
 
-// ─── Perception ──────────────────────────────────────────────
+// ─── Perception ──────────────────────────────────────────
 
 function runPlugin(plugin: PerceptionPlugin): PerceptionSignal {
   const cached = perceptionCache.get(plugin.name);
   const now = Date.now();
   const interval = parseInterval(plugin.interval);
 
-  // Respect interval — don't re-run too soon
   if (cached && (now - cached.lastRun) < interval) {
     return cached;
   }
@@ -163,20 +165,18 @@ function perceive(): PerceptionSignal[] {
   return config.perception.map(p => runPlugin(p));
 }
 
-// ─── Context Composer ────────────────────────────────────────
+// ─── Context Composer ────────────────────────────────────
 
 function composeContext(signals: PerceptionSignal[]): string {
   const totalBudget = config.model.context_size;
-  const responseBudget = Math.floor(totalBudget * 0.2); // reserve 20% for response
+  const responseBudget = Math.floor(totalBudget * 0.2);
   const available = totalBudget - responseBudget;
 
-  // Load identity
   const soulPath = resolve(agentDir, config.soul);
   const soul = existsSync(soulPath) ? readFileSync(soulPath, 'utf-8') : '(no identity defined)';
   const soulBudget = Math.floor(available * config.context.identity / 100);
   const soulText = truncateToTokens(soul, soulBudget);
 
-  // Compose perception — prioritize changed signals
   const percBudget = Math.floor(available * config.context.perception / 100);
   const changedSignals = signals.filter(s => s.changed);
   const stableSignals = signals.filter(s => !s.changed);
@@ -192,13 +192,11 @@ function composeContext(signals: PerceptionSignal[]): string {
     percTokens += sectionTokens;
   }
 
-  // Load memory (simple: just MEMORY.md for now)
   const memBudget = Math.floor(available * config.context.memory / 100);
   const memPath = join(resolve(agentDir, config.memory.dir), 'MEMORY.md');
   const memRaw = existsSync(memPath) ? readFileSync(memPath, 'utf-8') : '';
   const memText = truncateToTokens(memRaw, memBudget);
 
-  // Recent conversation
   const convBudget = Math.floor(available * config.context.conversation / 100);
   let convText = '';
   let convTokens = 0;
@@ -222,12 +220,11 @@ function composeContext(signals: PerceptionSignal[]): string {
 function truncateToTokens(text: string, maxTokens: number): string {
   const estimated = estimateTokens(text);
   if (estimated <= maxTokens) return text;
-  // Rough character cut
   const ratio = maxTokens / estimated;
   return text.slice(0, Math.floor(text.length * ratio)) + '\n...(truncated)';
 }
 
-// ─── Model Interface ─────────────────────────────────────────
+// ─── Model Interface ─────────────────────────────────────
 
 async function callModel(context: string, prompt: string): Promise<string> {
   const messages: Message[] = [
@@ -244,7 +241,6 @@ async function callModel(context: string, prompt: string): Promise<string> {
     url = `${base_url}/api/chat`;
     body = { model, messages, stream: false };
   } else {
-    // OpenAI-compatible
     url = `${base_url}/v1/chat/completions`;
     body = { model, messages, stream: false };
   }
@@ -272,7 +268,7 @@ async function callModel(context: string, prompt: string): Promise<string> {
   }
 }
 
-// ─── Action Dispatcher ───────────────────────────────────────
+// ─── Action Dispatcher ───────────────────────────────────
 
 interface ParsedAction {
   tag: string;
@@ -296,7 +292,6 @@ function parseTags(response: string): ParsedAction[] {
     actions.push({ tag: tag!, content: content!.trim(), attrs });
   }
 
-  // Self-closing tags: <agent:schedule next="5m" reason="..." />
   const selfClosing = /<agent:(\w+)([^/]*?)\/>/g;
   while ((match = selfClosing.exec(response)) !== null) {
     const [, tag, attrStr] = match;
@@ -338,7 +333,6 @@ function dispatch(actions: ParsedAction[]): { nextInterval?: number } {
 
       case 'chat':
         log('chat', action.content);
-        // Future: webhook, stdout, Telegram, etc.
         console.log(`\n💬 ${config.name}: ${action.content}\n`);
         break;
 
@@ -359,22 +353,192 @@ function dispatch(actions: ParsedAction[]): { nextInterval?: number } {
   return { nextInterval };
 }
 
-// ─── OODA Loop ───────────────────────────────────────────────
+// ─── HTTP Server ─────────────────────────────────────────
 
-async function cycle(cycleNum: number): Promise<number | undefined> {
-  log('loop', `cycle #${cycleNum} start`);
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+    req.on('end', () => resolve(body));
+    req.on('error', reject);
+  });
+}
 
-  // 1. Perceive
+function respond(res: ServerResponse, status: number, data: unknown): void {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+}
+
+function startServer(port: number): void {
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url ?? '/', `http://localhost:${port}`);
+
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    if (req.method === 'OPTIONS') {
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/health') {
+      respond(res, 200, {
+        ok: true,
+        name: config.name,
+        uptime: Math.floor((Date.now() - startTime) / 1000),
+      });
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/status') {
+      respond(res, 200, {
+        name: config.name,
+        uptime: Math.floor((Date.now() - startTime) / 1000),
+        cycles: cycleCount,
+        perception: {
+          plugins: config.perception.length,
+          cached: perceptionCache.size,
+          signals: [...perceptionCache.values()].map(s => ({
+            name: s.name,
+            category: s.category,
+            changed: s.changed,
+            lastRun: new Date(s.lastRun).toISOString(),
+          })),
+        },
+        loop: { interval: config.loop.interval },
+        conversation: { messages: conversationHistory.length },
+      });
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/perception') {
+      respond(res, 200, {
+        signals: [...perceptionCache.values()].map(s => ({
+          name: s.name,
+          category: s.category,
+          changed: s.changed,
+          content: s.content,
+          lastRun: new Date(s.lastRun).toISOString(),
+        })),
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/inbox') {
+      try {
+        const body = await readBody(req);
+        const { from, text } = JSON.parse(body) as { from?: string; text?: string };
+        if (!text) {
+          respond(res, 400, { error: 'text is required' });
+          return;
+        }
+
+        const inboxDir = join(agentDir, 'inbox');
+        if (!existsSync(inboxDir)) mkdirSync(inboxDir, { recursive: true });
+
+        const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        const ts = new Date().toISOString();
+        writeFileSync(
+          join(inboxDir, `${id}.json`),
+          JSON.stringify({ id, from: from ?? 'user', text, ts }, null, 2),
+        );
+        log('inbox', `message from ${from ?? 'user'}: ${text.slice(0, 80)}`);
+
+        wakeLoop();
+        respond(res, 200, { ok: true, id });
+      } catch {
+        respond(res, 400, { error: 'invalid JSON — expected { "text": "...", "from": "..." }' });
+      }
+      return;
+    }
+
+    respond(res, 404, { error: 'not found' });
+  });
+
+  server.listen(port, () => {
+    log('server', `listening on http://localhost:${port}`);
+  });
+}
+
+// ─── Wake Mechanism ──────────────────────────────────────
+
+function wakeLoop(): void {
+  if (wakeResolve) {
+    wakeResolve();
+    wakeResolve = null;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(r => {
+    const timer = setTimeout(r, ms);
+    wakeResolve = () => {
+      clearTimeout(timer);
+      r();
+    };
+  });
+}
+
+// ─── Graceful Shutdown ──────────────────────────────────
+
+function persistConversations(): void {
+  const convPath = join(resolve(agentDir, config.memory.dir), 'conversations.jsonl');
+  try {
+    const lines = conversationHistory.map(m => JSON.stringify(m)).join('\n');
+    writeFileSync(convPath, lines + '\n');
+  } catch { /* best effort */ }
+}
+
+function loadConversations(): void {
+  const convPath = join(resolve(agentDir, config.memory.dir), 'conversations.jsonl');
+  if (!existsSync(convPath)) return;
+  try {
+    const lines = readFileSync(convPath, 'utf-8').trim().split('\n');
+    for (const line of lines) {
+      if (line) conversationHistory.push(JSON.parse(line) as Message);
+    }
+    log('init', `restored ${conversationHistory.length} conversation messages`);
+  } catch { /* start fresh */ }
+}
+
+function shutdown(signal: string): void {
+  log('shutdown', `received ${signal}`);
+  persistConversations();
+  log('shutdown', `saved ${conversationHistory.length} messages — goodbye`);
+  process.exit(0);
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+// ─── Inbox Cleanup ───────────────────────────────────────
+
+function cleanInbox(): void {
+  const inboxDir = join(agentDir, 'inbox');
+  if (!existsSync(inboxDir)) return;
+  try {
+    for (const file of readdirSync(inboxDir)) {
+      if (file.endsWith('.json') || file.endsWith('.txt') || file.endsWith('.md')) {
+        unlinkSync(join(inboxDir, file));
+      }
+    }
+  } catch { /* fire and forget */ }
+}
+
+// ─── OODA Loop ───────────────────────────────────────────
+
+async function cycle(num: number): Promise<number | undefined> {
+  log('loop', `cycle #${num} start`);
+
   const signals = perceive();
   const changedCount = signals.filter(s => s.changed).length;
   log('perceive', `${signals.length} plugins, ${changedCount} changed`);
 
-  // 2. Compose context
   const context = composeContext(signals);
 
-  // 3. Decide — call model
   const prompt = [
-    `You are ${config.name}, an autonomous agent. Cycle #${cycleNum}.`,
+    `You are ${config.name}, an autonomous agent. Cycle #${num}.`,
     `Time: ${new Date().toISOString()}`,
     changedCount > 0
       ? `${changedCount} perception signal(s) changed since last cycle.`
@@ -396,57 +560,58 @@ async function cycle(cycleNum: number): Promise<number | undefined> {
     return undefined;
   }
 
-  // Save to conversation history
   conversationHistory.push(
     { role: 'user', content: prompt },
-    { role: 'assistant', content: response }
+    { role: 'assistant', content: response },
   );
-  // Keep last 20 exchanges
   while (conversationHistory.length > 40) {
     conversationHistory.shift();
   }
 
-  // 4. Act — parse and dispatch
   const actions = parseTags(response);
   const { nextInterval } = dispatch(actions);
 
-  // Log raw response if no tags found (model might not follow format yet)
   if (actions.length === 0 && response.trim()) {
     log('response', response.trim().slice(0, 200));
   }
 
-  log('loop', `cycle #${cycleNum} end (${actions.length} actions)`);
+  cleanInbox();
+  persistConversations();
+  log('loop', `cycle #${num} end (${actions.length} actions)`);
   return nextInterval;
 }
 
-// ─── Main ────────────────────────────────────────────────────
+// ─── Main ────────────────────────────────────────────────
 
 async function main(): Promise<void> {
   const configPath = process.argv[2] ?? 'agent.yaml';
   agentDir = resolve(process.cwd());
+  startTime = Date.now();
 
-  console.log('mushi v0.0.1');
+  console.log('mushi v0.1.0');
   console.log(`config: ${configPath}`);
 
   config = loadConfig(resolve(agentDir, configPath));
   console.log(`agent: ${config.name}`);
   console.log(`model: ${config.model.provider}/${config.model.model}`);
   console.log(`context: ${config.model.context_size} tokens`);
+
+  loadConversations();
+
+  const port = config.server?.port ?? 3000;
+  startServer(port);
   console.log();
 
   const defaultInterval = parseInterval(config.loop.interval);
   const minInterval = parseInterval(config.loop.min_interval);
   const maxInterval = parseInterval(config.loop.max_interval);
 
-  let cycleNum = 0;
   let interval = defaultInterval;
 
-  // OODA loop
   while (true) {
-    cycleNum++;
-    const nextInterval = await cycle(cycleNum);
+    cycleCount++;
+    const nextInterval = await cycle(cycleCount);
 
-    // Self-adjusting interval
     if (nextInterval !== undefined) {
       interval = Math.max(minInterval, Math.min(maxInterval, nextInterval));
     } else {
@@ -454,7 +619,7 @@ async function main(): Promise<void> {
     }
 
     log('loop', `sleeping ${Math.round(interval / 1000)}s`);
-    await new Promise(r => setTimeout(r, interval));
+    await sleep(interval);
   }
 }
 
