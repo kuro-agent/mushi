@@ -42,6 +42,7 @@ echo ""
 echo "=== Recent Activity ==="
 recent=$(find "$DIR" -maxdepth 3 \( -name "*.ts" -o -name "*.js" -o -name "*.py" -o -name "*.md" -o -name "*.sh" \) \
   -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/dist/*" \
+  -not -path "*/memory/*" -not -path "*/logs/*" \
   -newer /tmp/mushi-last-check 2>/dev/null | head -10)
 
 if [ -n "$recent" ]; then

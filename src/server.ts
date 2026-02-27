@@ -12,8 +12,9 @@ export interface ServerDeps {
   config: AgentConfig;
   agentDir: string;
   startTime: number;
-  getCycleCount: () => number;
-  getLastCycleAt: () => number;
+  getSenseCount: () => number;
+  getThinkCount: () => number;
+  getLastThinkAt: () => number;
   getPerceptionCache: () => Map<string, PerceptionSignal>;
   getConversationHistory: () => Message[];
   wakeLoop: () => void;
@@ -49,14 +50,15 @@ export function startServer(port: number, deps: ServerDeps): void {
     }
 
     if (req.method === 'GET' && url.pathname === '/health') {
-      const lastCycle = deps.getLastCycleAt();
+      const lastThink = deps.getLastThinkAt();
       respond(res, 200, {
         ok: true,
         name: config.name,
         uptime: Math.floor((Date.now() - startTime) / 1000),
-        cycles: deps.getCycleCount(),
-        lastCycleAt: lastCycle ? new Date(lastCycle).toISOString() : null,
-        lastCycleAgo: lastCycle ? Math.floor((Date.now() - lastCycle) / 1000) : null,
+        senses: deps.getSenseCount(),
+        thinks: deps.getThinkCount(),
+        lastThinkAt: lastThink ? new Date(lastThink).toISOString() : null,
+        lastThinkAgo: lastThink ? Math.floor((Date.now() - lastThink) / 1000) : null,
       });
       return;
     }
@@ -66,7 +68,8 @@ export function startServer(port: number, deps: ServerDeps): void {
       respond(res, 200, {
         name: config.name,
         uptime: Math.floor((Date.now() - startTime) / 1000),
-        cycles: deps.getCycleCount(),
+        senses: deps.getSenseCount(),
+        thinks: deps.getThinkCount(),
         perception: {
           plugins: config.perception.length,
           cached: cache.size,

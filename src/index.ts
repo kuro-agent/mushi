@@ -1,9 +1,12 @@
 /**
  * mushi — Perception-first agent framework
  *
- * Core thesis: Constraints generate capability.
- * Small context windows force radical prioritization,
- * which produces more structured, useful behavior.
+ * Two-layer architecture:
+ *   Layer 1 (Sense): Fast 5s perception loop. Hash diff, no LLM. <1ms per scan.
+ *   Layer 2 (Think): LLM call only when perception triggers. ~10s per think.
+ *
+ * The slime mold model: tentacles sense constantly (cheap),
+ * chemical signals fire only when food/obstacle detected (expensive).
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
@@ -24,9 +27,11 @@ let config: AgentConfig;
 const perceptionCache = new Map<string, PerceptionSignal>();
 const conversationHistory: Message[] = [];
 let startTime = Date.now();
-let cycleCount = 0;
+let senseCount = 0;
+let thinkCount = 0;
 let wakeResolve: (() => void) | null = null;
-let lastCycleAt = 0;
+let forcePerceive = false;
+let lastThinkAt = 0;
 
 // ─── Config ─────────────────────────────────────────────
 
@@ -90,6 +95,7 @@ function composeContext(signals: PerceptionSignal[]): string {
 // ─── Wake / Sleep ───────────────────────────────────────
 
 function wakeLoop(): void {
+  forcePerceive = true;
   if (wakeResolve) {
     wakeResolve();
     wakeResolve = null;
@@ -157,7 +163,9 @@ function cleanInbox(): void {
 // ─── Metrics ─────────────────────────────────────────────
 
 interface CycleMetrics {
-  cycle: number;
+  type: 'think';
+  think: number;
+  sense: number;
   ts: string;
   model: string;
   durationMs: number;
@@ -167,7 +175,6 @@ interface CycleMetrics {
   perceptionChanged: number;
   actions: Record<string, number>;
   memoryEntries: number;
-  scheduledNext: string | null;
   responseLength: number;
 }
 
@@ -192,64 +199,29 @@ function writeMetrics(metrics: CycleMetrics): void {
   } catch { /* fire and forget */ }
 }
 
-// ─── OODA Cycle ─────────────────────────────────────────
+// ─── Layer 2: Think (LLM call) ──────────────────────────
 
-async function cycle(num: number): Promise<number | undefined> {
-  const cycleStart = Date.now();
-  log(agentDir, 'loop', `cycle #${num} start`);
-
-  const signals = perceive(config.perception, agentDir, perceptionCache);
+async function think(num: number, signals: PerceptionSignal[]): Promise<void> {
+  const thinkStart = Date.now();
   const changedCount = signals.filter(s => s.changed).length;
-  const triggerCount = signals.filter(s => s.changed && s.trigger).length;
-  log(agentDir, 'perceive', `${signals.length} plugins, ${changedCount} changed, ${triggerCount} triggers`);
 
-  // ─── Two-Layer Perception Gate ─────────────────────────
-  // L0: Nothing changed at all → skip
-  if (changedCount === 0 && num > 1) {
-    lastCycleAt = Date.now();
-    log(agentDir, 'loop', `cycle #${num} L0-skip — no perception changes`);
-    writeMetrics({
-      cycle: num, ts: new Date().toISOString(), model: config.model.model,
-      durationMs: Date.now() - cycleStart, modelLatencyMs: 0,
-      contextTokens: 0, perceptionTotal: signals.length, perceptionChanged: 0,
-      actions: { 'l0-skip': 1 }, memoryEntries: countMemoryEntries(),
-      scheduledNext: null, responseLength: 0,
-    });
-    return undefined;
-  }
-
-  // L1: Changes exist but no trigger signals — noise filtered
-  if (triggerCount === 0 && num > 1) {
-    lastCycleAt = Date.now();
-    log(agentDir, 'loop', `cycle #${num} L1-skip — ${changedCount} changes but no trigger signals`);
-    writeMetrics({
-      cycle: num, ts: new Date().toISOString(), model: config.model.model,
-      durationMs: Date.now() - cycleStart, modelLatencyMs: 0,
-      contextTokens: 0, perceptionTotal: signals.length, perceptionChanged: changedCount,
-      actions: { 'l1-skip': 1 }, memoryEntries: countMemoryEntries(),
-      scheduledNext: null, responseLength: 0,
-    });
-    return undefined;
-  }
-
-  // L2: Meaningful trigger signal → call LLM
+  log(agentDir, 'think', `think #${num} start (sense #${senseCount})`);
 
   const context = composeContext(signals);
   const contextTokens = estimateTokens(context);
 
   const prompt = [
-    `You are ${config.name}, an autonomous agent. Cycle #${num}.`,
+    `You are ${config.name}, an autonomous agent. Think #${num} (sense scan #${senseCount}).`,
     `Time: ${new Date().toISOString()}`,
     changedCount > 0
-      ? `${changedCount} perception signal(s) changed since last cycle.`
+      ? `${changedCount} perception signal(s) changed — something happened.`
       : 'No perception changes.',
     '',
     'Based on your identity and perception, decide what to do.',
     'Use <agent:action>...</agent:action> to report what you did.',
     'Use <agent:remember>...</agent:remember> to save insights.',
     'Use <agent:chat>...</agent:chat> to speak.',
-    'Use <agent:schedule next="Xm" reason="..." /> to set next interval.',
-    'If nothing useful to do, say so.',
+    'If nothing useful to do, say so briefly.',
   ].join('\n');
 
   const modelStart = Date.now();
@@ -258,7 +230,7 @@ async function cycle(num: number): Promise<number | undefined> {
     response = await callModel(config.model, agentDir, context, prompt);
   } catch (err) {
     log(agentDir, 'error', `model call failed: ${err instanceof Error ? err.message : 'unknown'}`);
-    return undefined;
+    return;
   }
   const modelLatencyMs = Date.now() - modelStart;
 
@@ -271,7 +243,7 @@ async function cycle(num: number): Promise<number | undefined> {
   }
 
   const actions = parseTags(response);
-  const { nextInterval } = dispatch(actions, config, agentDir);
+  dispatch(actions, config, agentDir);
 
   if (actions.length === 0 && response.trim()) {
     log(agentDir, 'response', response.trim().slice(0, 200));
@@ -280,41 +252,39 @@ async function cycle(num: number): Promise<number | undefined> {
   cleanInbox();
   persistConversations();
 
-  // ─── Structured Metrics ───
   const actionCounts: Record<string, number> = {};
   for (const a of actions) {
     actionCounts[a.tag] = (actionCounts[a.tag] ?? 0) + 1;
   }
-  const scheduledNext = actions.find(a => a.tag === 'schedule')?.attrs.next ?? null;
 
   writeMetrics({
-    cycle: num,
+    type: 'think',
+    think: num,
+    sense: senseCount,
     ts: new Date().toISOString(),
     model: config.model.model,
-    durationMs: Date.now() - cycleStart,
+    durationMs: Date.now() - thinkStart,
     modelLatencyMs,
     contextTokens,
     perceptionTotal: signals.length,
     perceptionChanged: changedCount,
     actions: actionCounts,
     memoryEntries: countMemoryEntries(),
-    scheduledNext,
     responseLength: response.length,
   });
 
-  lastCycleAt = Date.now();
-  log(agentDir, 'loop', `cycle #${num} end (${actions.length} actions, model ${modelLatencyMs}ms, ctx ~${contextTokens}tok)`);
-  return nextInterval;
+  lastThinkAt = Date.now();
+  log(agentDir, 'think', `think #${num} end (${actions.length} actions, model ${modelLatencyMs}ms, ctx ~${contextTokens}tok)`);
 }
 
-// ─── Main ───────────────────────────────────────────────
+// ─── Main: Two-Layer Loop ───────────────────────────────
 
 async function main(): Promise<void> {
   const configPath = process.argv[2] ?? 'agent.yaml';
   agentDir = resolve(process.cwd());
   startTime = Date.now();
 
-  console.log('mushi v0.1.0');
+  console.log('mushi v0.2.0 — two-layer architecture');
   console.log(`config: ${configPath}`);
 
   config = loadConfig(resolve(agentDir, configPath));
@@ -329,32 +299,61 @@ async function main(): Promise<void> {
     config,
     agentDir,
     startTime,
-    getCycleCount: () => cycleCount,
-    getLastCycleAt: () => lastCycleAt,
+    getSenseCount: () => senseCount,
+    getThinkCount: () => thinkCount,
+    getLastThinkAt: () => lastThinkAt,
     getPerceptionCache: () => perceptionCache,
     getConversationHistory: () => conversationHistory,
     wakeLoop,
   });
   console.log();
 
-  const defaultInterval = parseInterval(config.loop.interval);
-  const minInterval = parseInterval(config.loop.min_interval);
-  const maxInterval = parseInterval(config.loop.max_interval);
+  const senseInterval = config.loop.sense_interval
+    ? parseInterval(config.loop.sense_interval)
+    : 5000;
 
-  let interval = defaultInterval;
+  log(agentDir, 'loop', `two-layer: sense every ${senseInterval}ms, think only on trigger`);
 
   while (true) {
-    cycleCount++;
-    const nextInterval = await cycle(cycleCount);
+    senseCount++;
 
-    if (nextInterval !== undefined) {
-      interval = Math.max(minInterval, Math.min(maxInterval, nextInterval));
-    } else {
-      interval = defaultInterval;
+    // Force re-run trigger plugins when woken by inbox/API
+    if (forcePerceive) {
+      for (const plugin of config.perception) {
+        if (plugin.trigger) perceptionCache.delete(plugin.name);
+      }
+      forcePerceive = false;
     }
 
-    log(agentDir, 'loop', `sleeping ${Math.round(interval / 1000)}s`);
-    await sleep(interval);
+    // Layer 1: Sense (fast, no LLM)
+    const signals = perceive(config.perception, agentDir, perceptionCache);
+    const triggerSignals = signals.filter(s => s.changed && s.trigger);
+    const hasRealSignal = triggerSignals.some(s => s.signalStrength === 'signal');
+
+    // Think cooldown: don't re-think within 30s of last think
+    // Prevents self-triggered loops (mushi writes MEMORY.md → dev-watcher detects → think → repeat)
+    const thinkCooldown = 30_000;
+    const cooledDown = lastThinkAt === 0 || (Date.now() - lastThinkAt) >= thinkCooldown;
+
+    // Bootstrap: first scan always thinks
+    const shouldThink = senseCount === 1 || (triggerSignals.length > 0 && hasRealSignal && cooledDown);
+
+    if (!shouldThink) {
+      // Log every ~60s (12 scans at 5s interval)
+      if (senseCount % 12 === 0) {
+        log(agentDir, 'sense', `#${senseCount} scans, ${thinkCount} thinks — quiet`);
+      }
+      await sleep(senseInterval);
+      continue;
+    }
+
+    // Layer 2: Think (LLM call, only when perception triggered)
+    thinkCount++;
+    const triggers = triggerSignals.map(s => s.name).join(',');
+    log(agentDir, 'sense', `#${senseCount} → think #${thinkCount} (triggers: ${triggers || 'bootstrap'})`);
+
+    await think(thinkCount, signals);
+    await sleep(senseInterval);
   }
 }
 

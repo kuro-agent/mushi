@@ -21,9 +21,10 @@ export interface ModelConfig {
 }
 
 export interface LoopConfig {
-  interval: string;
-  min_interval: string;
-  max_interval: string;
+  sense_interval?: string;   // fast perception poll (default: 5s)
+  interval: string;          // legacy (unused in two-layer mode)
+  min_interval: string;      // legacy
+  max_interval: string;      // legacy
 }
 
 export interface PerceptionPlugin {
@@ -43,6 +44,8 @@ export interface ContextBudget {
   buffer: number;
 }
 
+export type SignalStrength = 'noise' | 'low' | 'signal';
+
 export interface PerceptionSignal {
   name: string;
   category: string;
@@ -50,6 +53,7 @@ export interface PerceptionSignal {
   hash: string;
   changed: boolean;
   trigger: boolean;          // propagated from plugin config
+  signalStrength: SignalStrength;  // classified change type (noise/low/signal)
   lastRun: number;
 }
 
