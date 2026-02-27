@@ -10,9 +10,9 @@ model:
   context_size: 8192        # tokens — the framework adapts to this
 
 loop:
-  interval: 60s             # default cycle interval
-  min_interval: 30s
-  max_interval: 10m          # cap: small models over-schedule; 4h wastes experiment time
+  interval: 10s             # near-zero gap — let model latency be the bottleneck, not scheduling
+  min_interval: 5s          # effectively "as fast as possible"
+  max_interval: 5m           # still cap self-scheduling, but much tighter
 
 perception:
   - name: filesystem
