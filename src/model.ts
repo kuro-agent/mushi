@@ -23,7 +23,14 @@ export async function callModel(
 
   if (provider === 'ollama') {
     url = `${base_url}/api/chat`;
-    body = { model, messages, stream: false };
+    body = {
+      model, messages, stream: false,
+      keep_alive: -1,          // never unload — eliminates cold start
+      options: {
+        num_predict: 512,      // cap response length — agents don't need essays
+        num_ctx: 4096,         // tighter KV cache — reduces attention overhead
+      },
+    };
   } else {
     url = `${base_url}/v1/chat/completions`;
     body = { model, messages, stream: false };

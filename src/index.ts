@@ -158,6 +158,7 @@ function cleanInbox(): void {
 interface CycleMetrics {
   cycle: number;
   ts: string;
+  model: string;
   durationMs: number;
   modelLatencyMs: number;
   contextTokens: number;
@@ -256,6 +257,7 @@ async function cycle(num: number): Promise<number | undefined> {
   writeMetrics({
     cycle: num,
     ts: new Date().toISOString(),
+    model: config.model.model,
     durationMs: Date.now() - cycleStart,
     modelLatencyMs,
     contextTokens,

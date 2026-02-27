@@ -6,7 +6,7 @@ soul: ./memory/SOUL.md
 model:
   provider: ollama          # ollama | openai-compatible
   base_url: http://localhost:11434
-  model: llama3.2           # any model the provider supports
+  model: qwen2.5:1.5b       # A/B test: 2.3x faster prompt eval than llama3.2:3b
   context_size: 8192        # tokens — the framework adapts to this
 
 loop:
