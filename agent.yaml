@@ -1,4 +1,4 @@
-# kuro-agent configuration
+# mushi configuration
 name: my-agent
 soul: ./memory/SOUL.md
 

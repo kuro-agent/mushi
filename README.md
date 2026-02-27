@@ -1,10 +1,10 @@
-# kuro-agent
+# mushi
 
 A perception-first agent framework for any LLM. Smaller models, tighter constraints, better behavior.
 
 ## Thesis
 
-Most agent frameworks assume a powerful model with a large context window. kuro-agent assumes the opposite: **a cheap, small model with limited context**. This constraint isn't a problem — it's the design.
+Most agent frameworks assume a powerful model with a large context window. mushi assumes the opposite: **a cheap, small model with limited context**. This constraint isn't a problem — it's the design.
 
 Smaller context windows force radical prioritization. The framework decides what the model needs to see, not the model. This produces agents that are more structured, more predictable, and more useful than "dump everything into 128K tokens and hope."
 
@@ -14,8 +14,8 @@ This is [Oulipo](https://en.wikipedia.org/wiki/Oulipo) for agents: voluntary con
 
 ```bash
 # Clone and install
-git clone https://github.com/kuro-agent/kuro-agent.git
-cd kuro-agent
+git clone https://github.com/kuro-agent/mushi.git
+cd mushi
 npm install
 
 # Start Ollama (or any OpenAI-compatible API)
@@ -47,7 +47,7 @@ Your agent will start perceiving its environment, composing context within budge
 
 ### Budget-First Context
 
-The key innovation. Instead of generating context and then truncating, kuro-agent **allocates budget first**:
+The key innovation. Instead of generating context and then truncating, mushi **allocates budget first**:
 
 ```yaml
 context:
@@ -154,7 +154,7 @@ The model communicates through structured tags:
 
 **Shell plugins over code plugins.** Any language, any tool, zero coupling. A `curl` call is a perception plugin. A Python script is a perception plugin. The agent's "senses" are just programs that output text.
 
-**Budget-first over truncation.** Most frameworks build full context then cut. kuro-agent allocates space first, then fills. This means the model always gets a balanced view — never all-perception-no-memory or all-conversation-no-identity.
+**Budget-first over truncation.** Most frameworks build full context then cut. mushi allocates space first, then fills. This means the model always gets a balanced view — never all-perception-no-memory or all-conversation-no-identity.
 
 **Tags over function calling.** Small models are bad at structured function calling. They're decent at generating XML-like tags in natural language. The tag system works with any model that can follow simple formatting instructions.
 
@@ -162,7 +162,7 @@ The model communicates through structured tags:
 
 ## Philosophy
 
-kuro-agent exists because of a simple observation: **the best agents aren't the ones with the most tokens — they're the ones that use their tokens best.**
+mushi exists because of a simple observation: **the best agents aren't the ones with the most tokens — they're the ones that use their tokens best.**
 
 A perception-first agent with 8K context and a $0 local model can be more useful than a goal-driven agent with 128K context and a $20/month API — if the framework is smart about what goes into that context window.
 

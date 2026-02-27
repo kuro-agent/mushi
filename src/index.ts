@@ -1,5 +1,5 @@
 /**
- * kuro-agent — Perception-first agent framework
+ * mushi — Perception-first agent framework
  *
  * Core thesis: Constraints generate capability.
  * Small context windows force radical prioritization,
@@ -425,7 +425,7 @@ async function main(): Promise<void> {
   const configPath = process.argv[2] ?? 'agent.yaml';
   agentDir = resolve(process.cwd());
 
-  console.log('kuro-agent v0.0.1');
+  console.log('mushi v0.0.1');
   console.log(`config: ${configPath}`);
 
   config = loadConfig(resolve(agentDir, configPath));

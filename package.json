@@ -1,5 +1,5 @@
 {
-  "name": "kuro-agent",
+  "name": "mushi",
   "version": "0.0.1",
   "description": "Perception-first agent framework for any LLM. Constraints generate capability.",
   "type": "module",
