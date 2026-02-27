@@ -12,7 +12,7 @@ model:
 loop:
   interval: 60s             # default cycle interval
   min_interval: 30s
-  max_interval: 4h
+  max_interval: 10m          # cap: small models over-schedule; 4h wastes experiment time
 
 perception:
   - name: filesystem

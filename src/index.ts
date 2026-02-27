@@ -153,9 +153,47 @@ function cleanInbox(): void {
   } catch { /* fire and forget */ }
 }
 
+// ─── Metrics ─────────────────────────────────────────────
+
+interface CycleMetrics {
+  cycle: number;
+  ts: string;
+  durationMs: number;
+  modelLatencyMs: number;
+  contextTokens: number;
+  perceptionTotal: number;
+  perceptionChanged: number;
+  actions: Record<string, number>;
+  memoryEntries: number;
+  scheduledNext: string | null;
+  responseLength: number;
+}
+
+function countMemoryEntries(): number {
+  const memPath = join(resolve(agentDir, config.memory.dir), 'MEMORY.md');
+  if (!existsSync(memPath)) return 0;
+  try {
+    const content = readFileSync(memPath, 'utf-8');
+    return content.split('\n').filter(l => l.startsWith('- ')).length;
+  } catch { return 0; }
+}
+
+function writeMetrics(metrics: CycleMetrics): void {
+  try {
+    const metricsDir = join(agentDir, 'logs');
+    if (!existsSync(metricsDir)) mkdirSync(metricsDir, { recursive: true });
+    writeFileSync(
+      join(metricsDir, 'metrics.jsonl'),
+      JSON.stringify(metrics) + '\n',
+      { flag: 'a' },
+    );
+  } catch { /* fire and forget */ }
+}
+
 // ─── OODA Cycle ─────────────────────────────────────────
 
 async function cycle(num: number): Promise<number | undefined> {
+  const cycleStart = Date.now();
   log(agentDir, 'loop', `cycle #${num} start`);
 
   const signals = perceive(config.perception, agentDir, perceptionCache);
@@ -163,6 +201,7 @@ async function cycle(num: number): Promise<number | undefined> {
   log(agentDir, 'perceive', `${signals.length} plugins, ${changedCount} changed`);
 
   const context = composeContext(signals);
+  const contextTokens = estimateTokens(context);
 
   const prompt = [
     `You are ${config.name}, an autonomous agent. Cycle #${num}.`,
@@ -179,6 +218,7 @@ async function cycle(num: number): Promise<number | undefined> {
     'If nothing useful to do, say so.',
   ].join('\n');
 
+  const modelStart = Date.now();
   let response: string;
   try {
     response = await callModel(config.model, agentDir, context, prompt);
@@ -186,6 +226,7 @@ async function cycle(num: number): Promise<number | undefined> {
     log(agentDir, 'error', `model call failed: ${err instanceof Error ? err.message : 'unknown'}`);
     return undefined;
   }
+  const modelLatencyMs = Date.now() - modelStart;
 
   conversationHistory.push(
     { role: 'user', content: prompt },
@@ -204,7 +245,29 @@ async function cycle(num: number): Promise<number | undefined> {
 
   cleanInbox();
   persistConversations();
-  log(agentDir, 'loop', `cycle #${num} end (${actions.length} actions)`);
+
+  // ─── Structured Metrics ───
+  const actionCounts: Record<string, number> = {};
+  for (const a of actions) {
+    actionCounts[a.tag] = (actionCounts[a.tag] ?? 0) + 1;
+  }
+  const scheduledNext = actions.find(a => a.tag === 'schedule')?.attrs.next ?? null;
+
+  writeMetrics({
+    cycle: num,
+    ts: new Date().toISOString(),
+    durationMs: Date.now() - cycleStart,
+    modelLatencyMs,
+    contextTokens,
+    perceptionTotal: signals.length,
+    perceptionChanged: changedCount,
+    actions: actionCounts,
+    memoryEntries: countMemoryEntries(),
+    scheduledNext,
+    responseLength: response.length,
+  });
+
+  log(agentDir, 'loop', `cycle #${num} end (${actions.length} actions, model ${modelLatencyMs}ms, ctx ~${contextTokens}tok)`);
   return nextInterval;
 }
 
