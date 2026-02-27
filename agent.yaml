@@ -1,6 +1,6 @@
 # mushi — your agent's configuration
 # Edit 'name' and 'memory/SOUL.md' to define your agent's identity.
-name: my-agent
+name: mushi
 soul: ./memory/SOUL.md
 
 model:
