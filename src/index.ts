@@ -26,6 +26,7 @@ const conversationHistory: Message[] = [];
 let startTime = Date.now();
 let cycleCount = 0;
 let wakeResolve: (() => void) | null = null;
+let lastCycleAt = 0;
 
 // ─── Config ─────────────────────────────────────────────
 
@@ -201,6 +202,20 @@ async function cycle(num: number): Promise<number | undefined> {
   const changedCount = signals.filter(s => s.changed).length;
   log(agentDir, 'perceive', `${signals.length} plugins, ${changedCount} changed`);
 
+  // L0: Skip LLM call if nothing changed — saves ~10s per no-op cycle
+  if (changedCount === 0 && num > 1) {
+    lastCycleAt = Date.now();
+    log(agentDir, 'loop', `cycle #${num} skip — no perception changes`);
+    writeMetrics({
+      cycle: num, ts: new Date().toISOString(), model: config.model.model,
+      durationMs: Date.now() - cycleStart, modelLatencyMs: 0,
+      contextTokens: 0, perceptionTotal: signals.length, perceptionChanged: 0,
+      actions: { skip: 1 }, memoryEntries: countMemoryEntries(),
+      scheduledNext: null, responseLength: 0,
+    });
+    return undefined;
+  }
+
   const context = composeContext(signals);
   const contextTokens = estimateTokens(context);
 
@@ -269,6 +284,7 @@ async function cycle(num: number): Promise<number | undefined> {
     responseLength: response.length,
   });
 
+  lastCycleAt = Date.now();
   log(agentDir, 'loop', `cycle #${num} end (${actions.length} actions, model ${modelLatencyMs}ms, ctx ~${contextTokens}tok)`);
   return nextInterval;
 }
@@ -296,6 +312,7 @@ async function main(): Promise<void> {
     agentDir,
     startTime,
     getCycleCount: () => cycleCount,
+    getLastCycleAt: () => lastCycleAt,
     getPerceptionCache: () => perceptionCache,
     getConversationHistory: () => conversationHistory,
     wakeLoop,

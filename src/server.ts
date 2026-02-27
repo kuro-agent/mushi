@@ -13,6 +13,7 @@ export interface ServerDeps {
   agentDir: string;
   startTime: number;
   getCycleCount: () => number;
+  getLastCycleAt: () => number;
   getPerceptionCache: () => Map<string, PerceptionSignal>;
   getConversationHistory: () => Message[];
   wakeLoop: () => void;
@@ -48,10 +49,14 @@ export function startServer(port: number, deps: ServerDeps): void {
     }
 
     if (req.method === 'GET' && url.pathname === '/health') {
+      const lastCycle = deps.getLastCycleAt();
       respond(res, 200, {
         ok: true,
         name: config.name,
         uptime: Math.floor((Date.now() - startTime) / 1000),
+        cycles: deps.getCycleCount(),
+        lastCycleAt: lastCycle ? new Date(lastCycle).toISOString() : null,
+        lastCycleAgo: lastCycle ? Math.floor((Date.now() - lastCycle) / 1000) : null,
       });
       return;
     }
@@ -121,6 +126,15 @@ export function startServer(port: number, deps: ServerDeps): void {
     }
 
     respond(res, 404, { error: 'not found' });
+  });
+
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      log(agentDir, 'server', `port ${port} in use — retrying in 2s`);
+      setTimeout(() => server.listen(port), 2000);
+    } else {
+      throw err;
+    }
   });
 
   server.listen(port, () => {
