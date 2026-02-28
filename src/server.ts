@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AgentConfig, PerceptionSignal, Message } from './types.js';
 import { log } from './utils.js';
+import { callModel } from './model.js';
 
 export interface ServerDeps {
   config: AgentConfig;
@@ -126,6 +127,51 @@ export function startServer(port: number, deps: ServerDeps): void {
         respond(res, 200, { ok: true, id });
       } catch {
         respond(res, 400, { error: 'invalid JSON — expected { "text": "...", "from": "..." }' });
+      }
+      return;
+    }
+
+    // ─── Consensus Detection ─────────────────────────────
+    if (req.method === 'POST' && url.pathname === '/api/consensus') {
+      try {
+        const body = await readBody(req);
+        const { messages: msgs } = JSON.parse(body) as { messages?: Array<{ from: string; text: string }> };
+        if (!msgs || msgs.length === 0) {
+          respond(res, 400, { error: 'messages array required' });
+          return;
+        }
+
+        const recent = msgs.slice(-5);
+        const dialogue = recent.map(m => `[${m.from}]: ${m.text.slice(0, 300)}`).join('\n\n');
+
+        const systemPrompt = [
+          'You are a discussion analyst. Given a conversation between participants, determine:',
+          '1. Have they converged on an agreement? (yes/no)',
+          '2. What is the main disagreement or open question? (one sentence)',
+          '3. What should they discuss next to make progress? (one sentence)',
+          '',
+          'Respond in EXACTLY this JSON format, nothing else:',
+          '{"converged": true/false, "agreement": "what they agree on", "disagreement": "remaining gap", "suggestion": "next step"}',
+        ].join('\n');
+
+        const start = Date.now();
+        const result = await callModel(config.model, agentDir, systemPrompt, dialogue);
+        const latencyMs = Date.now() - start;
+
+        let parsed: Record<string, unknown>;
+        try {
+          const jsonMatch = result.match(/\{[\s\S]*\}/);
+          parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { raw: result };
+        } catch {
+          parsed = { raw: result };
+        }
+
+        log(agentDir, 'consensus', `${latencyMs}ms — converged: ${parsed.converged ?? 'unknown'}`);
+        respond(res, 200, { ok: true, latencyMs, ...parsed });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'unknown';
+        log(agentDir, 'error', `consensus failed: ${msg}`);
+        respond(res, 500, { error: msg });
       }
       return;
     }
