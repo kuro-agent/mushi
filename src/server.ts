@@ -131,6 +131,133 @@ export function startServer(port: number, deps: ServerDeps): void {
       return;
     }
 
+    // ─── Trigger Triage ─────────────────────────────────
+    if (req.method === 'POST' && url.pathname === '/api/triage') {
+      try {
+        const body = await readBody(req);
+        const { trigger, source, metadata } = JSON.parse(body) as {
+          trigger?: string;
+          source?: string;
+          metadata?: { inboxEmpty?: boolean; lastThinkAgo?: number; hasOverdueTasks?: boolean };
+        };
+        if (!trigger) {
+          respond(res, 400, { error: 'trigger type is required' });
+          return;
+        }
+
+        // Hard rules — bypass LLM for obvious cases
+        const alwaysWake = ['telegram', 'room', 'chat', 'alert', 'mobile'];
+        if (alwaysWake.includes(source ?? trigger)) {
+          respond(res, 200, { ok: true, action: 'wake', reason: `${source ?? trigger} always wakes`, latencyMs: 0, method: 'rule' });
+          return;
+        }
+
+        // LLM triage for ambiguous cases
+        const triagePrompt = [
+          'You classify trigger events for an AI agent. Decide: should this trigger start a full thinking cycle (expensive) or be skipped (noise)?',
+          '',
+          'Respond with JSON only: {"action": "wake" or "skip", "reason": "one line"}',
+          '',
+          'Guidelines:',
+          '- workspace changes from auto-commit (agent\'s own changes) → skip',
+          '- workspace changes from external edits → wake',
+          '- cron heartbeat with no overdue tasks → skip',
+          '- cron with overdue tasks → wake',
+          '- startup/bootstrap → wake',
+          '- heartbeat when last think was recent (<5min) and nothing changed → skip',
+        ].join('\n');
+
+        const input = [
+          `Trigger: ${trigger}`,
+          source ? `Source: ${source}` : '',
+          metadata ? `Metadata: ${JSON.stringify(metadata)}` : '',
+        ].filter(Boolean).join('\n');
+
+        const start = Date.now();
+        const result = await callModel(config.model, agentDir, triagePrompt, input);
+        const latencyMs = Date.now() - start;
+
+        let parsed: { action?: string; reason?: string };
+        try {
+          const jsonMatch = result.match(/\{[\s\S]*\}/);
+          parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { action: 'wake', reason: 'parse failed — defaulting to wake' };
+        } catch {
+          parsed = { action: 'wake', reason: 'parse failed — defaulting to wake' };
+        }
+
+        log(agentDir, 'triage', `${latencyMs}ms — ${trigger}/${source ?? '?'} → ${parsed.action}`);
+        respond(res, 200, { ok: true, action: parsed.action ?? 'wake', reason: parsed.reason ?? '', latencyMs, method: 'llm' });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'unknown';
+        log(agentDir, 'error', `triage failed: ${msg}`);
+        // On error, always wake (fail-open)
+        respond(res, 200, { ok: true, action: 'wake', reason: `triage error: ${msg}`, latencyMs: 0, method: 'error' });
+      }
+      return;
+    }
+
+    // ─── Repetition Detection ──────────────────────────────
+    if (req.method === 'POST' && url.pathname === '/api/dedup') {
+      try {
+        const body = await readBody(req);
+        const { text, existing } = JSON.parse(body) as { text?: string; existing?: string[] };
+        if (!text) {
+          respond(res, 400, { error: 'text is required' });
+          return;
+        }
+        if (!existing || existing.length === 0) {
+          respond(res, 200, { ok: true, isDuplicate: false, reason: 'no existing entries', latencyMs: 0 });
+          return;
+        }
+
+        const dedupPrompt = [
+          'You detect duplicate content. Given a NEW entry and EXISTING entries, determine if the new entry is a duplicate or near-duplicate.',
+          '',
+          'Respond with JSON only: {"isDuplicate": true/false, "matchedIndex": N or -1, "similarity": 0.0-1.0, "reason": "one line"}',
+          '',
+          'Rules:',
+          '- Same insight rephrased = duplicate (similarity > 0.8)',
+          '- Same topic but new angle = not duplicate',
+          '- Strictly new information = not duplicate',
+        ].join('\n');
+
+        const entries = existing.slice(-20).map((e, i) => `[${i}] ${e.slice(0, 200)}`).join('\n');
+        const input = `NEW: ${text.slice(0, 300)}\n\nEXISTING:\n${entries}`;
+
+        const start = Date.now();
+        const result = await callModel(config.model, agentDir, dedupPrompt, input);
+        const latencyMs = Date.now() - start;
+
+        let parsed: { isDuplicate?: boolean; matchedIndex?: number; similarity?: number; reason?: string };
+        try {
+          const jsonMatch = result.match(/\{[\s\S]*\}/);
+          parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { isDuplicate: false };
+        } catch {
+          parsed = { isDuplicate: false, reason: 'parse failed — allowing write' };
+        }
+
+        const matchedEntry = parsed.matchedIndex != null && parsed.matchedIndex >= 0 && existing[parsed.matchedIndex]
+          ? existing[parsed.matchedIndex]!.slice(0, 100)
+          : undefined;
+
+        log(agentDir, 'dedup', `${latencyMs}ms — ${parsed.isDuplicate ? 'DUPLICATE' : 'unique'} (${(parsed.similarity ?? 0).toFixed(2)})`);
+        respond(res, 200, {
+          ok: true,
+          isDuplicate: parsed.isDuplicate ?? false,
+          similarity: parsed.similarity ?? 0,
+          matchedEntry,
+          reason: parsed.reason ?? '',
+          latencyMs,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'unknown';
+        log(agentDir, 'error', `dedup failed: ${msg}`);
+        // On error, allow write (fail-open)
+        respond(res, 200, { ok: true, isDuplicate: false, reason: `dedup error: ${msg}`, latencyMs: 0 });
+      }
+      return;
+    }
+
     // ─── Consensus Detection ─────────────────────────────
     if (req.method === 'POST' && url.pathname === '/api/consensus') {
       try {
