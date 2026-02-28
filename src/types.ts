@@ -18,6 +18,11 @@ export interface ModelConfig {
   base_url: string;
   model: string;
   context_size: number;
+  fallback?: {
+    provider: string;
+    base_url: string;
+    model: string;
+  };
 }
 
 export interface LoopConfig {

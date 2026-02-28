@@ -1,9 +1,73 @@
 /**
- * mushi — model interface (OpenAI-compatible + Ollama)
+ * mushi — model interface (OpenAI-compatible + Ollama + Taalas HC1)
  */
 
 import type { Message, ModelConfig } from './types.js';
 import { estimateTokens, log } from './utils.js';
+
+interface ProviderConfig {
+  provider: string;
+  base_url: string;
+  model: string;
+}
+
+async function callProvider(
+  prov: ProviderConfig,
+  messages: Message[],
+): Promise<string> {
+  const { provider, base_url, model } = prov;
+
+  let url: string;
+  let body: Record<string, unknown>;
+
+  if (provider === 'taalas') {
+    url = `${base_url}/api/chat`;
+    body = {
+      messages,
+      chatOptions: { selectedModel: model },
+    };
+  } else if (provider === 'ollama') {
+    url = `${base_url}/api/chat`;
+    body = {
+      model, messages, stream: false,
+      keep_alive: -1,
+      options: {
+        num_predict: 512,
+        num_ctx: 4096,
+      },
+    };
+  } else {
+    url = `${base_url}/v1/chat/completions`;
+    body = { model, messages, stream: false };
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!response.ok) {
+    throw new Error(`${provider} API error: ${response.status} ${response.statusText}`);
+  }
+
+  if (provider === 'taalas') {
+    // Vercel AI SDK text format: response text + <|stats|>{...}<|/stats|>
+    const text = await response.text();
+    return text.replace(/<\|stats\|>[\s\S]*?<\|\/stats\|>/g, '').trim();
+  }
+
+  const data = await response.json() as Record<string, unknown>;
+
+  if (provider === 'ollama') {
+    const msg = data.message as { content: string } | undefined;
+    return msg?.content ?? '';
+  } else {
+    const choices = data.choices as Array<{ message: { content: string } }> | undefined;
+    return choices?.[0]?.message?.content ?? '';
+  }
+}
 
 export async function callModel(
   modelConfig: ModelConfig,
@@ -16,45 +80,25 @@ export async function callModel(
     { role: 'user', content: prompt },
   ];
 
-  const { provider, base_url, model } = modelConfig;
+  const primary: ProviderConfig = {
+    provider: modelConfig.provider,
+    base_url: modelConfig.base_url,
+    model: modelConfig.model,
+  };
 
-  let url: string;
-  let body: Record<string, unknown>;
+  log(agentDir, 'model', `calling ${primary.provider}/${primary.model} (context: ~${estimateTokens(context)} tokens)`);
 
-  if (provider === 'ollama') {
-    url = `${base_url}/api/chat`;
-    body = {
-      model, messages, stream: false,
-      keep_alive: -1,          // never unload — eliminates cold start
-      options: {
-        num_predict: 512,      // cap response length — agents don't need essays
-        num_ctx: 4096,         // tighter KV cache — reduces attention overhead
-      },
-    };
-  } else {
-    url = `${base_url}/v1/chat/completions`;
-    body = { model, messages, stream: false };
-  }
+  try {
+    return await callProvider(primary, messages);
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : 'unknown';
 
-  log(agentDir, 'model', `calling ${provider}/${model} (context: ~${estimateTokens(context)} tokens)`);
+    if (modelConfig.fallback) {
+      const fb = modelConfig.fallback;
+      log(agentDir, 'model', `${primary.provider} failed (${errMsg}), falling back to ${fb.provider}/${fb.model}`);
+      return await callProvider(fb, messages);
+    }
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Model API error: ${response.status} ${response.statusText}`);
-  }
-
-  const data = await response.json() as Record<string, unknown>;
-
-  if (provider === 'ollama') {
-    const msg = data.message as { content: string } | undefined;
-    return msg?.content ?? '';
-  } else {
-    const choices = data.choices as Array<{ message: { content: string } }> | undefined;
-    return choices?.[0]?.message?.content ?? '';
+    throw err;
   }
 }

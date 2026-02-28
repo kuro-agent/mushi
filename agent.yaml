@@ -4,10 +4,14 @@ name: mushi
 soul: ./memory/SOUL.md
 
 model:
-  provider: ollama          # ollama | openai-compatible
-  base_url: http://localhost:11434
-  model: qwen2.5:3b         # upgraded: 1.5b was fast but 0 actions in 9 cycles — too small for OODA
+  provider: taalas           # taalas HC1 — llama3.1-8B, 17ms triage
+  base_url: https://chatjimmy.ai
+  model: llama3.1-8B
   context_size: 8192        # tokens — the framework adapts to this
+  fallback:
+    provider: ollama
+    base_url: http://localhost:11434
+    model: qwen2.5:3b
 
 loop:
   sense_interval: 5s        # Layer 1: fast perception poll (no LLM)
