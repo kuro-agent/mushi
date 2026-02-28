@@ -5,7 +5,7 @@
  * making mushi a perception outpost for Kuro.
  */
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentConfig, ParsedAction } from './types.js';
 import { parseInterval, log } from './utils.js';
@@ -50,6 +50,7 @@ export function dispatch(
   agentDir: string,
 ): { nextInterval?: number } {
   let nextInterval: number | undefined;
+  const seenEscalations = new Set<string>();
 
   for (const action of actions) {
     switch (action.tag) {
@@ -58,6 +59,12 @@ export function dispatch(
         break;
 
       case 'remember': {
+        const content = action.content.trim();
+        // Quality gate: skip vague/short/placeholder content
+        if (!content || content.length < 15 || /^(the pattern|a pattern|something|noted)$/i.test(content)) {
+          log(agentDir, 'memory', `filtered (too vague): ${content.slice(0, 40)}`);
+          break;
+        }
         const memDir = join(agentDir, config.memory.dir);
         const topic = action.attrs.topic;
         const targetFile = topic
@@ -67,7 +74,16 @@ export function dispatch(
         const dir = topic ? join(memDir, 'topics') : memDir;
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-        writeFileSync(targetFile, '\n- ' + action.content + '\n', { flag: 'a' });
+        // Dedup: skip if already in file
+        try {
+          const existing = readFileSync(targetFile, 'utf-8');
+          if (existing.includes(content)) {
+            log(agentDir, 'memory', `filtered (duplicate): ${content.slice(0, 40)}`);
+            break;
+          }
+        } catch { /* file doesn't exist yet — ok to write */ }
+
+        writeFileSync(targetFile, '\n- ' + content + '\n', { flag: 'a' });
         log(agentDir, 'memory', `saved to ${topic ?? 'MEMORY.md'}`);
         break;
       }
@@ -85,6 +101,12 @@ export function dispatch(
           log(agentDir, 'escalate', `filtered (noise): ${raw.slice(0, 60)}`);
           break;
         }
+        // Dedup: skip identical escalations within same dispatch (LLM repetition)
+        if (seenEscalations.has(raw)) {
+          log(agentDir, 'escalate', `filtered (duplicate): ${raw.slice(0, 60)}`);
+          break;
+        }
+        seenEscalations.add(raw);
         const text = `[mushi] ${raw}`;
         log(agentDir, 'escalate', text);
         // Fire-and-forget: try room API, fallback to /chat inbox

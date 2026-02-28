@@ -6,8 +6,4 @@
 - qwen2.5:3b on native Metal GPU gives ~8s think latency. Docker CPU was 100s (13x slower).
 - Effective escalations: only escalate actual state changes, not "nothing happened" reports.
 
-- the pattern
-
-- the pattern
-
-- the pattern
+- Three fetch errors from Telegram and Digest-Bot sources in just under a minute
