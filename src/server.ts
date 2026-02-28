@@ -138,7 +138,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         const { trigger, source, metadata } = JSON.parse(body) as {
           trigger?: string;
           source?: string;
-          metadata?: { inboxEmpty?: boolean; lastThinkAgo?: number; hasOverdueTasks?: boolean };
+          metadata?: { inboxEmpty?: boolean; lastThinkAgo?: number; hasOverdueTasks?: boolean; messageText?: string };
         };
         if (!trigger) {
           respond(res, 400, { error: 'trigger type is required' });
@@ -147,13 +147,63 @@ export function startServer(port: number, deps: ServerDeps): void {
 
         // Hard rules — bypass LLM for obvious cases
         // Use `trigger` (clean keyword like "alert") not `source` (may have extra text like "alert (yielded, waited 264s)")
-        const alwaysWake = ['telegram', 'room', 'chat', 'alert', 'mobile'];
+        const alwaysWake = ['alert', 'mobile'];
         if (alwaysWake.includes(trigger)) {
           respond(res, 200, { ok: true, action: 'wake', reason: `${trigger} always wakes`, latencyMs: 0, method: 'rule' });
           return;
         }
 
-        // LLM triage for ambiguous cases
+        // Direct message triage — classify as instant (fast /api/ask) or wake (full OODA)
+        const directMessageTriggers = ['telegram', 'room', 'chat'];
+        if (directMessageTriggers.includes(trigger)) {
+          // No message text → can't classify, default to wake
+          if (!metadata?.messageText) {
+            respond(res, 200, { ok: true, action: 'wake', reason: 'direct message without text — defaulting to wake', latencyMs: 0, method: 'rule' });
+            return;
+          }
+
+          const instantPrompt = [
+            'You classify user messages for an AI agent. Decide: can this be answered instantly from memory/status (instant), or does it need deep thinking/action (wake)?',
+            '',
+            'Respond with JSON only: {"action": "instant" or "wake", "reason": "one line"}',
+            '',
+            'INSTANT — answer from memory, status, or simple lookup:',
+            '- Status queries: "在幹嘛", "what are you doing", "status"',
+            '- Simple factual questions answerable from memory',
+            '- Greetings, acknowledgements, short reactions',
+            '- "OK", "好", "understood" type messages',
+            '',
+            'WAKE — needs full thinking cycle:',
+            '- Requests to DO something (implement, fix, create, deploy)',
+            '- Complex questions requiring research or multi-step reasoning',
+            '- Messages with URLs to analyze',
+            '- Instructions, directives, task assignments',
+            '- Questions about external topics needing web lookup',
+          ].join('\n');
+
+          const msgInput = `Message: ${metadata.messageText.slice(0, 500)}`;
+
+          const start = Date.now();
+          const result = await callModel(config.model, agentDir, instantPrompt, msgInput);
+          const latencyMs = Date.now() - start;
+
+          let parsed: { action?: string; reason?: string };
+          try {
+            const jsonMatch = result.match(/\{[\s\S]*\}/);
+            parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { action: 'wake', reason: 'parse failed — defaulting to wake' };
+          } catch {
+            parsed = { action: 'wake', reason: 'parse failed — defaulting to wake' };
+          }
+
+          // Validate action — only allow instant or wake
+          const action = parsed.action === 'instant' ? 'instant' : 'wake';
+
+          log(agentDir, 'triage', `${latencyMs}ms — DM ${trigger} → ${action}: ${metadata.messageText.slice(0, 80)}`);
+          respond(res, 200, { ok: true, action, reason: parsed.reason ?? '', latencyMs, method: 'llm' });
+          return;
+        }
+
+        // LLM triage for ambiguous cases (workspace, cron, heartbeat, etc.)
         const triagePrompt = [
           'You classify trigger events for an AI agent. Decide: should this trigger start a full thinking cycle (expensive) or be skipped (noise)?',
           '',
