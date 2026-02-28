@@ -13,6 +13,10 @@ import { parseInterval, log } from './utils.js';
 const KURO_ROOM_URL = 'http://localhost:3001/api/room';
 const KURO_CHAT_URL = 'http://localhost:3001/chat';
 
+// Cross-cycle escalation dedup: track recent escalations with timestamps
+const recentEscalations = new Map<string, number>(); // text → timestamp
+const ESCALATION_DEDUP_WINDOW = 30 * 60 * 1000; // 30 minutes
+
 export function parseTags(response: string): ParsedAction[] {
   const actions: ParsedAction[] = [];
   const regex = /<agent:(\w+)([^>]*)>([\s\S]*?)<\/agent:\1>/g;
@@ -61,7 +65,8 @@ export function dispatch(
       case 'remember': {
         const content = action.content.trim();
         // Quality gate: skip vague/short/placeholder content
-        if (!content || content.length < 15 || /^(the pattern|a pattern|something|noted)$/i.test(content)) {
+        if (!content || content.length < 15 || /^(the pattern|a pattern|something|noted)$/i.test(content)
+            || /^(WRITE YOUR|e\.g\.\s)/i.test(content)) {
           log(agentDir, 'memory', `filtered (too vague): ${content.slice(0, 40)}`);
           break;
         }
@@ -107,6 +112,18 @@ export function dispatch(
           break;
         }
         seenEscalations.add(raw);
+        // Cross-cycle dedup: skip if same text was escalated within 30min window
+        const now = Date.now();
+        const lastSent = recentEscalations.get(raw);
+        if (lastSent && now - lastSent < ESCALATION_DEDUP_WINDOW) {
+          log(agentDir, 'escalate', `filtered (recent, ${Math.round((now - lastSent) / 60000)}min ago): ${raw.slice(0, 60)}`);
+          break;
+        }
+        // Clean old entries
+        for (const [k, v] of recentEscalations) {
+          if (now - v > ESCALATION_DEDUP_WINDOW) recentEscalations.delete(k);
+        }
+        recentEscalations.set(raw, now);
         const text = `[mushi] ${raw}`;
         log(agentDir, 'escalate', text);
         // Fire-and-forget: try room API, fallback to /chat inbox

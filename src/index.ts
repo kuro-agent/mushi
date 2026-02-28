@@ -226,7 +226,7 @@ async function think(num: number, signals: PerceptionSignal[]): Promise<void> {
     '',
     'Then decide ONE action (pick the FIRST that applies):',
     '- Kuro offline or errors → <agent:escalate>describe the problem specifically</agent:escalate>',
-    '- Notable pattern (be specific!) → <agent:remember>e.g. "3 fetch errors in 10min from telegram poll"</agent:remember>',
+    '- Notable pattern (be specific!) → <agent:remember>WRITE YOUR OBSERVATION HERE (a full sentence describing what you noticed)</agent:remember>',
     '- New commits or file changes → <agent:action>describe what changed specifically</agent:action>',
     '- Inbox has a message → read it and respond or escalate',
     '- Nothing notable → just write observations, NO tags',

@@ -5,5 +5,3 @@
 - My workspace is /Users/user/Workspace/mushi. Kuro's workspace is /Users/user/Workspace/mini-agent.
 - qwen2.5:3b on native Metal GPU gives ~8s think latency. Docker CPU was 100s (13x slower).
 - Effective escalations: only escalate actual state changes, not "nothing happened" reports.
-
-- Three fetch errors from Telegram and Digest-Bot sources in just under a minute
