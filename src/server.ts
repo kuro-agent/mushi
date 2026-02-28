@@ -146,9 +146,10 @@ export function startServer(port: number, deps: ServerDeps): void {
         }
 
         // Hard rules — bypass LLM for obvious cases
+        // Use `trigger` (clean keyword like "alert") not `source` (may have extra text like "alert (yielded, waited 264s)")
         const alwaysWake = ['telegram', 'room', 'chat', 'alert', 'mobile'];
-        if (alwaysWake.includes(source ?? trigger)) {
-          respond(res, 200, { ok: true, action: 'wake', reason: `${source ?? trigger} always wakes`, latencyMs: 0, method: 'rule' });
+        if (alwaysWake.includes(trigger)) {
+          respond(res, 200, { ok: true, action: 'wake', reason: `${trigger} always wakes`, latencyMs: 0, method: 'rule' });
           return;
         }
 
