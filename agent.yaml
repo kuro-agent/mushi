@@ -42,6 +42,12 @@ perception:
     trigger: true
     strip_pattern: "\\d+s|Active task: \\d+"
 
+  - name: log-watcher
+    script: ./plugins/log-watcher.sh
+    interval: 60s
+    category: sentinel
+    trigger: true
+
   - name: clock
     script: ./plugins/clock.sh
     interval: 300s

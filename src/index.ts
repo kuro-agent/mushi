@@ -213,18 +213,29 @@ async function think(num: number, signals: PerceptionSignal[]): Promise<void> {
   const contextTokens = estimateTokens(context);
 
   const prompt = [
-    `You are ${config.name}, an autonomous agent. Think #${num} (sense scan #${senseCount}).`,
-    `Time: ${new Date().toISOString()}`,
+    `Think #${num} | Sense #${senseCount} | ${new Date().toISOString()}`,
     changedCount > 0
-      ? `${changedCount} perception signal(s) changed — something happened.`
-      : 'No perception changes.',
+      ? `⚡ ${changedCount} signal(s) changed.`
+      : '— No perception changes.',
     '',
-    'Based on your identity and perception, decide what to do.',
-    'Use <agent:action>...</agent:action> to report what you did.',
-    'Use <agent:remember>...</agent:remember> to save insights.',
-    'Use <agent:chat>...</agent:chat> to speak.',
-    'Use <agent:escalate>...</agent:escalate> ONLY when you detect actual changes — new files, modified files, errors, new inbox messages, anomalies. If nothing changed, do NOT escalate. Never report "no changes" or "unchanged" — silence means no change.',
-    'If nothing useful to do, say so briefly.',
+    'TASK: Analyze each perception signal. Write a brief observation.',
+    '',
+    'For each signal, answer:',
+    '1. What is the current state? (one sentence)',
+    '2. Anything unusual or noteworthy? (yes/no + why)',
+    '',
+    'Then decide ONE action:',
+    '- If Kuro went offline or shows errors → <agent:escalate>what happened</agent:escalate>',
+    '- If you notice a pattern or trend → <agent:remember>the pattern</agent:remember>',
+    '- If new commits or file changes → <agent:action>summarize what changed</agent:action>',
+    '- If inbox has a message → read it and respond or escalate',
+    '- If truly nothing notable → just write your observations, no tags needed',
+    '',
+    'RULES:',
+    '- Be specific. "3 commits in 1h" not "some activity".',
+    '- Never escalate "no changes" — silence = no change.',
+    '- Do NOT repeat previous observations. Say something new or say nothing.',
+    '- Keep response under 200 words.',
   ].join('\n');
 
   const modelStart = Date.now();
