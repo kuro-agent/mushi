@@ -262,6 +262,48 @@ export function startServer(port: number, deps: ServerDeps): void {
       return;
     }
 
+    // ─── Instant Reply — quick first response for direct messages ──────
+    if (req.method === 'POST' && url.pathname === '/api/instant-reply') {
+      try {
+        const body = await readBody(req);
+        const { message, context: msgContext, recentMessages } = JSON.parse(body) as {
+          message?: string;
+          context?: string;
+          recentMessages?: Array<{ from: string; text: string }>;
+        };
+        if (!message) {
+          respond(res, 400, { error: 'message is required' });
+          return;
+        }
+
+        const systemPrompt = [
+          'You are Kuro, a personal AI assistant. Generate a quick, natural first response to this message.',
+          'Keep it SHORT (1-3 sentences). Be genuine and conversational.',
+          'This is a fast acknowledgement — a deeper response will follow if needed.',
+          'Reply in the same language as the message. If Chinese, use 繁體中文.',
+          'Do NOT use emoji prefixes like 💬 or 🤔.',
+          '',
+          msgContext ? `Context: ${msgContext.slice(0, 500)}` : '',
+          recentMessages?.length
+            ? `Recent conversation:\n${recentMessages.slice(-5).map(m => `${m.from}: ${m.text.slice(0, 200)}`).join('\n')}`
+            : '',
+        ].filter(Boolean).join('\n');
+
+        const start = Date.now();
+        const result = await callModel(config.model, agentDir, systemPrompt, `Message from Alex: ${message.slice(0, 500)}`);
+        const latencyMs = Date.now() - start;
+
+        const reply = result.trim().slice(0, 500);
+        log(agentDir, 'instant-reply', `${latencyMs}ms — "${message.slice(0, 60)}" → "${reply.slice(0, 60)}"`);
+        respond(res, 200, { ok: true, reply, latencyMs });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'unknown';
+        log(agentDir, 'error', `instant-reply failed: ${msg}`);
+        respond(res, 500, { error: msg });
+      }
+      return;
+    }
+
     // ─── Repetition Detection ──────────────────────────────
     if (req.method === 'POST' && url.pathname === '/api/dedup') {
       try {
