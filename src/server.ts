@@ -156,14 +156,14 @@ export function startServer(port: number, deps: ServerDeps): void {
         }
 
         // Cron optimization — skip redundant HEARTBEAT checks when Kuro recently thought
-        // If Kuro thought within 20min AND no perception change, the cron HEARTBEAT check is redundant
-        // (Kuro already checked HEARTBEAT during its recent cycle)
+        // HEARTBEAT.md is checked in every OODA cycle, so a cron HEARTBEAT check is redundant
+        // if Kuro thought recently. perceptionChanged is too coarse (timestamps always change),
+        // so we only check lastThinkAgo with a 25min threshold (cron runs every 30min).
         if (trigger === 'cron' && source && /heartbeat|pending.tasks/i.test(source)) {
           const lastThink = metadata?.lastThinkAgo ?? Infinity;
-          const perceptionChanged = (metadata as Record<string, unknown>)?.perceptionChanged ?? true;
-          if (lastThink < 1200 && !perceptionChanged) {
-            log(agentDir, 'triage', `0ms — cron/heartbeat → skip (rule: lastThink=${lastThink}s, no perception change)`);
-            respond(res, 200, { ok: true, action: 'skip', reason: `cron heartbeat redundant — Kuro thought ${lastThink}s ago, no change`, latencyMs: 0, method: 'rule' });
+          if (lastThink < 1500) {
+            log(agentDir, 'triage', `0ms — cron/heartbeat → skip (rule: lastThink=${lastThink}s < 25min)`);
+            respond(res, 200, { ok: true, action: 'skip', reason: `cron heartbeat redundant — Kuro thought ${lastThink}s ago`, latencyMs: 0, method: 'rule' });
             return;
           }
         }
