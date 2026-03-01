@@ -8,6 +8,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AgentConfig, PerceptionSignal, Message } from './types.js';
 import { log } from './utils.js';
 import { callModel } from './model.js';
+import { getRoomWatcherStatus } from './room-watcher.js';
 
 export interface ServerDeps {
   config: AgentConfig;
@@ -62,6 +63,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         escalations: deps.getEscalationCount(),
         lastThinkAt: lastThink ? new Date(lastThink).toISOString() : null,
         lastThinkAgo: lastThink ? Math.floor((Date.now() - lastThink) / 1000) : null,
+        roomWatcher: getRoomWatcherStatus(),
       });
       return;
     }

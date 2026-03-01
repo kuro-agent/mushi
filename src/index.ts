@@ -19,6 +19,7 @@ import { perceive, runPlugin } from './perception.js';
 import { callModel } from './model.js';
 import { parseTags, dispatch } from './dispatcher.js';
 import { startServer } from './server.js';
+import { startRoomWatcher } from './room-watcher.js';
 
 // ─── State ──────────────────────────────────────────────
 
@@ -369,6 +370,9 @@ async function main(): Promise<void> {
     getConversationHistory: () => conversationHistory,
     wakeLoop,
   });
+  // Start room watcher (discussion accelerator)
+  startRoomWatcher(config.model, agentDir);
+  console.log('room-watcher: monitoring Chat Room SSE');
   console.log();
 
   const senseInterval = config.loop.sense_interval
