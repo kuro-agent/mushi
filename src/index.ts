@@ -17,7 +17,7 @@ import type { AgentConfig, PerceptionSignal, Message } from './types.js';
 import { parseInterval, estimateTokens, truncateToTokens, log } from './utils.js';
 import { perceive, runPlugin } from './perception.js';
 import { callModel } from './model.js';
-import { parseTags, dispatch } from './dispatcher.js';
+import { parseTags, dispatch, initDedupState, saveDedupState } from './dispatcher.js';
 import { startServer } from './server.js';
 import { startRoomWatcher } from './room-watcher.js';
 
@@ -142,6 +142,7 @@ function loadConversations(): void {
 function shutdown(signal: string): void {
   log(agentDir, 'shutdown', `received ${signal}`);
   persistConversations();
+  saveDedupState();
   log(agentDir, 'shutdown', `saved ${conversationHistory.length} messages — goodbye`);
   process.exit(0);
 }
@@ -226,11 +227,13 @@ async function think(num: number, signals: PerceptionSignal[]): Promise<void> {
     '2. Anything unusual or noteworthy? (yes/no + why)',
     '',
     'Then decide ONE action (pick the FIRST that applies):',
-    '- Kuro offline or errors → <agent:escalate>describe the problem specifically</agent:escalate>',
-    '- Notable pattern (be specific!) → <agent:remember>WRITE YOUR OBSERVATION HERE (a full sentence describing what you noticed)</agent:remember>',
+    '- Kuro offline or has errors → <agent:escalate>STATE THE SPECIFIC PROBLEM (e.g. "Kuro offline for 5min" or "3 errors in kuro-watcher")</agent:escalate>',
+    '- Notable pattern (be specific!) → <agent:remember>STATE YOUR OBSERVATION (a full sentence describing what you noticed)</agent:remember>',
     '- New commits or file changes → <agent:action>describe what changed specifically</agent:action>',
     '- Inbox has a message → read it and respond or escalate',
     '- Nothing notable → just write observations, NO tags',
+    '',
+    'CRITICAL: Never output placeholder text like "describe the problem" — always write the ACTUAL problem you observed.',
     '',
     'RULES:',
     '- Be specific. "3 commits in 1h" not "some activity".',
@@ -259,6 +262,7 @@ async function think(num: number, signals: PerceptionSignal[]): Promise<void> {
 
   const actions = parseTags(response);
   dispatch(actions, config, agentDir);
+  saveDedupState(); // persist after each think cycle
 
   if (actions.length === 0 && response.trim()) {
     log(agentDir, 'response', response.trim().slice(0, 200));
@@ -325,6 +329,9 @@ function escalateToKuro(text: string): void {
   });
 }
 
+const autoEscalateDedup = new Map<string, number>(); // message → timestamp
+const AUTO_ESCALATE_DEDUP_WINDOW = 60 * 60 * 1000; // 1 hour
+
 function checkAutoEscalate(signals: PerceptionSignal[]): void {
   const kuro = signals.find(s => s.name === 'kuro-watcher');
   if (!kuro) return;
@@ -335,7 +342,19 @@ function checkAutoEscalate(signals: PerceptionSignal[]): void {
 
   // Escalate on status transition (skip first read)
   if (lastKuroStatus && lastKuroStatus !== status) {
-    escalateToKuro(`Kuro status changed: ${lastKuroStatus} → ${status}`);
+    const msg = `Kuro status changed: ${lastKuroStatus} → ${status}`;
+    const now = Date.now();
+    const lastSent = autoEscalateDedup.get(msg);
+    if (!lastSent || now - lastSent >= AUTO_ESCALATE_DEDUP_WINDOW) {
+      escalateToKuro(msg);
+      autoEscalateDedup.set(msg, now);
+      // Clean old entries
+      for (const [k, v] of autoEscalateDedup) {
+        if (now - v > AUTO_ESCALATE_DEDUP_WINDOW) autoEscalateDedup.delete(k);
+      }
+    } else {
+      log(agentDir, 'auto-escalate', `filtered (dedup, ${Math.round((now - lastSent) / 60000)}min ago): ${msg}`);
+    }
   }
   lastKuroStatus = status;
 }
@@ -356,6 +375,7 @@ async function main(): Promise<void> {
   console.log(`context: ${config.model.context_size} tokens`);
 
   loadConversations();
+  initDedupState(agentDir);
 
   const port = config.server?.port ?? 3000;
   startServer(port, {

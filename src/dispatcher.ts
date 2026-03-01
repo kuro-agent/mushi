@@ -15,7 +15,36 @@ const KURO_CHAT_URL = 'http://localhost:3001/chat';
 
 // Cross-cycle escalation dedup: track recent escalations with timestamps
 const recentEscalations = new Map<string, number>(); // text → timestamp
-const ESCALATION_DEDUP_WINDOW = 30 * 60 * 1000; // 30 minutes
+const ESCALATION_DEDUP_WINDOW = 60 * 60 * 1000; // 1 hour (was 30min, extended to survive restarts)
+
+// Persist dedup state across restarts
+let dedupStatePath = '';
+
+export function initDedupState(agentDir: string): void {
+  dedupStatePath = join(agentDir, 'logs', 'escalation-dedup.json');
+  try {
+    if (existsSync(dedupStatePath)) {
+      const data = JSON.parse(readFileSync(dedupStatePath, 'utf-8')) as Array<[string, number]>;
+      const now = Date.now();
+      for (const [text, ts] of data) {
+        if (now - ts < ESCALATION_DEDUP_WINDOW) {
+          recentEscalations.set(text, ts);
+        }
+      }
+      if (recentEscalations.size > 0) {
+        log(agentDir, 'dedup', `restored ${recentEscalations.size} recent escalation(s)`);
+      }
+    }
+  } catch { /* start fresh */ }
+}
+
+export function saveDedupState(): void {
+  if (!dedupStatePath) return;
+  try {
+    const data = [...recentEscalations.entries()];
+    writeFileSync(dedupStatePath, JSON.stringify(data));
+  } catch { /* best effort */ }
+}
 
 export function parseTags(response: string): ParsedAction[] {
   const actions: ParsedAction[] = [];
