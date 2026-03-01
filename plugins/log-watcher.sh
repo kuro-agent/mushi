@@ -13,9 +13,10 @@ fi
 
 echo "=== Mini-Agent Log Watch ==="
 
-# Recent errors (last 50 lines)
-ERRORS=$(tail -200 "$LOG" 2>/dev/null | grep -i "error\|fail\|timeout\|SIGTERM\|crash" | tail -5)
-ERROR_COUNT=$(tail -200 "$LOG" 2>/dev/null | grep -ci "error\|fail\|timeout" 2>/dev/null || echo "0")
+# Recent errors (last 200 lines)
+# Filter out mushi's own messages to prevent feedback loop (mushi escalates → log → mushi re-detects)
+ERRORS=$(tail -200 "$LOG" 2>/dev/null | grep -i "error\|fail\|timeout\|SIGTERM\|crash" | grep -vi "\[ROOM\].*mushi\|mushi:\|escalat" | tail -5)
+ERROR_COUNT=$(tail -200 "$LOG" 2>/dev/null | grep -i "error\|fail\|timeout" | grep -vi "\[ROOM\].*mushi\|mushi:\|escalat" | wc -l | tr -d ' ')
 
 echo "Recent errors (last 200 lines): $ERROR_COUNT"
 if [ -n "$ERRORS" ]; then
