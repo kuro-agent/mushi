@@ -411,6 +411,199 @@ export function startServer(port: number, deps: ServerDeps): void {
       return;
     }
 
+    // ─── Task Classification ─────────────────────────────
+    if (req.method === 'POST' && url.pathname === '/api/classify') {
+      try {
+        const body = await readBody(req);
+        const { source, content, context: classifyContext } = JSON.parse(body) as {
+          source?: string;
+          content?: string;
+          context?: { currentLoad?: number };
+        };
+        if (!content) {
+          respond(res, 400, { error: 'content is required' });
+          return;
+        }
+
+        const contentLower = content.toLowerCase();
+        const sourceLower = (source ?? '').toLowerCase();
+
+        // Hard rule: critical signals → P0 urgent
+        if (/\b(alert|crash|down|emergency|critical|p0)\b/i.test(contentLower) || sourceLower === 'alert') {
+          log(agentDir, 'classify', '0ms — P0 urgent (rule: critical signal)');
+          respond(res, 200, { ok: true, priority: 'P0', urgent: true, deep: true, reason: 'critical signal detected', latencyMs: 0, method: 'rule' });
+          return;
+        }
+
+        // Hard rule: direct messages
+        const directSources = ['telegram', 'room', 'chat'];
+        if (directSources.includes(sourceLower)) {
+          const trimmed = content.trim();
+          // Acknowledgements → P2 not urgent
+          if (/^(ok|好|沒問題|收到|understood|got it|thanks|謝|了解)[\s!.。！]*$/i.test(trimmed)) {
+            log(agentDir, 'classify', '0ms — P2 (rule: ack message)');
+            respond(res, 200, { ok: true, priority: 'P2', urgent: false, deep: false, reason: 'acknowledgement message', latencyMs: 0, method: 'rule' });
+            return;
+          }
+          // Status queries → P2 urgent (fast response)
+          if (/^(status|在幹嘛|你在做什麼|你好嗎|怎樣|how are you|what.?s up)[\s?？]*$/i.test(trimmed)) {
+            log(agentDir, 'classify', '0ms — P2 urgent (rule: status query)');
+            respond(res, 200, { ok: true, priority: 'P2', urgent: true, deep: false, reason: 'status query', latencyMs: 0, method: 'rule' });
+            return;
+          }
+          // Other direct messages: fall through to LLM with urgent hint
+        }
+
+        // Hard rule: cron → P2 not urgent
+        if (sourceLower === 'cron') {
+          log(agentDir, 'classify', '0ms — P2 (rule: cron)');
+          respond(res, 200, { ok: true, priority: 'P2', urgent: false, deep: false, reason: 'scheduled task', latencyMs: 0, method: 'rule' });
+          return;
+        }
+
+        // Hard rule: auto-commit noise → P3
+        if (sourceLower === 'workspace' && /auto.?commit|chore\(auto/i.test(contentLower)) {
+          log(agentDir, 'classify', '0ms — P3 (rule: auto-commit)');
+          respond(res, 200, { ok: true, priority: 'P3', urgent: false, deep: false, reason: 'auto-commit noise', latencyMs: 0, method: 'rule' });
+          return;
+        }
+
+        // LLM classify for ambiguous cases
+        const classifyPrompt = [
+          'You classify incoming tasks/messages for an AI agent by priority and urgency.',
+          '',
+          'Respond with JSON only: {"priority": "P0"|"P1"|"P2"|"P3", "urgent": true/false, "deep": true/false, "reason": "one line"}',
+          '',
+          'Priority levels:',
+          '- P0: Critical — system down, data loss, security issues',
+          '- P1: Important — user requests, bugs, time-sensitive tasks',
+          '- P2: Normal — scheduled tasks, learning, routine work',
+          '- P3: Low — noise, auto-generated, can be skipped',
+          '',
+          'urgent: needs response within minutes (not hours)',
+          'deep: needs full thinking cycle (vs quick answer)',
+          directSources.includes(sourceLower) ? '\nNote: this is a direct message — lean towards urgent=true' : '',
+        ].filter(Boolean).join('\n');
+
+        const input = [
+          `Source: ${source ?? 'unknown'}`,
+          `Content: ${content.slice(0, 500)}`,
+          classifyContext ? `Context: ${JSON.stringify(classifyContext)}` : '',
+        ].filter(Boolean).join('\n');
+
+        const start = Date.now();
+        const result = await callModel(config.model, agentDir, classifyPrompt, input);
+        const latencyMs = Date.now() - start;
+
+        let parsed: { priority?: string; urgent?: boolean; deep?: boolean; reason?: string };
+        try {
+          const jsonMatch = result.match(/\{[\s\S]*\}/);
+          parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { priority: 'P1', urgent: false, deep: true, reason: 'parse failed' };
+        } catch {
+          parsed = { priority: 'P1', urgent: false, deep: true, reason: 'parse failed' };
+        }
+
+        const validPriorities = ['P0', 'P1', 'P2', 'P3'];
+        const priority = validPriorities.includes(parsed.priority ?? '') ? parsed.priority! : 'P1';
+
+        log(agentDir, 'classify', `${latencyMs}ms — ${source ?? '?'} → ${priority} urgent=${parsed.urgent ?? false} deep=${parsed.deep ?? true}`);
+        respond(res, 200, {
+          ok: true,
+          priority,
+          urgent: parsed.urgent ?? false,
+          deep: parsed.deep ?? true,
+          reason: parsed.reason ?? '',
+          latencyMs,
+          method: 'llm',
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'unknown';
+        log(agentDir, 'error', `classify failed: ${msg}`);
+        // Fail-open: return safe default (P1, not urgent, needs deep thinking)
+        respond(res, 200, { ok: true, priority: 'P1', urgent: false, deep: true, reason: `classify error: ${msg}`, latencyMs: 0, method: 'error' });
+      }
+      return;
+    }
+
+    // ─── Continuation Check ─────────────────────────────
+    if (req.method === 'POST' && url.pathname === '/api/continuation-check') {
+      try {
+        const body = await readBody(req);
+        const { hasUnprocessedInbox, lastActionSummary, inProgressWork, source } = JSON.parse(body) as {
+          hasUnprocessedInbox?: boolean;
+          lastActionSummary?: string;
+          inProgressWork?: string;
+          source?: string;
+        };
+
+        // Hard rule: unprocessed inbox → always continue
+        if (hasUnprocessedInbox) {
+          log(agentDir, 'continuation', '0ms — continue (rule: unprocessed inbox)');
+          respond(res, 200, { ok: true, shouldContinue: true, deep: true, reason: 'unprocessed inbox items', latencyMs: 0, method: 'rule' });
+          return;
+        }
+
+        // Hard rule: no action summary → nothing to continue
+        if (!lastActionSummary) {
+          log(agentDir, 'continuation', '0ms — rest (rule: no previous action)');
+          respond(res, 200, { ok: true, shouldContinue: false, deep: false, reason: 'no previous action to continue', latencyMs: 0, method: 'rule' });
+          return;
+        }
+
+        // LLM evaluate: should agent continue or rest?
+        const continuationPrompt = [
+          'You decide if an AI agent should immediately continue working or rest until next scheduled cycle.',
+          '',
+          'Respond with JSON only: {"shouldContinue": true/false, "deep": true/false, "reason": "one line"}',
+          '',
+          'CONTINUE when:',
+          '- Last action explicitly mentions "next step" or has unfinished multi-step work',
+          '- In-progress work that would lose context if paused',
+          '- Multi-step task mid-execution',
+          '',
+          'REST when:',
+          '- Last action was a complete unit of work (learning, review, report)',
+          '- No clear next step mentioned',
+          '- Agent just sent a message and is waiting for reply',
+          '- Task was routine/scheduled (cron, daily review)',
+        ].join('\n');
+
+        const input = [
+          `Last action: ${lastActionSummary.slice(0, 500)}`,
+          inProgressWork ? `In-progress: ${inProgressWork.slice(0, 300)}` : '',
+          source ? `Trigger source: ${source}` : '',
+        ].filter(Boolean).join('\n');
+
+        const start = Date.now();
+        const result = await callModel(config.model, agentDir, continuationPrompt, input);
+        const latencyMs = Date.now() - start;
+
+        let parsed: { shouldContinue?: boolean; deep?: boolean; reason?: string };
+        try {
+          const jsonMatch = result.match(/\{[\s\S]*\}/);
+          parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { shouldContinue: false, reason: 'parse failed' };
+        } catch {
+          parsed = { shouldContinue: false, reason: 'parse failed' };
+        }
+
+        log(agentDir, 'continuation', `${latencyMs}ms — ${parsed.shouldContinue ? 'CONTINUE' : 'rest'}: ${parsed.reason ?? ''}`);
+        respond(res, 200, {
+          ok: true,
+          shouldContinue: parsed.shouldContinue ?? false,
+          deep: parsed.deep ?? false,
+          reason: parsed.reason ?? '',
+          latencyMs,
+          method: 'llm',
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'unknown';
+        log(agentDir, 'error', `continuation-check failed: ${msg}`);
+        // Fail-closed: don't continue on error (next scheduled cycle will catch up)
+        respond(res, 200, { ok: true, shouldContinue: false, deep: false, reason: `continuation-check error: ${msg}`, latencyMs: 0, method: 'error' });
+      }
+      return;
+    }
+
     respond(res, 404, { error: 'not found' });
   });
 
