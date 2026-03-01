@@ -155,6 +155,19 @@ export function startServer(port: number, deps: ServerDeps): void {
           return;
         }
 
+        // Cron optimization — skip redundant HEARTBEAT checks when Kuro recently thought
+        // If Kuro thought within 20min AND no perception change, the cron HEARTBEAT check is redundant
+        // (Kuro already checked HEARTBEAT during its recent cycle)
+        if (trigger === 'cron' && source && /heartbeat|pending.tasks/i.test(source)) {
+          const lastThink = metadata?.lastThinkAgo ?? Infinity;
+          const perceptionChanged = (metadata as Record<string, unknown>)?.perceptionChanged ?? true;
+          if (lastThink < 1200 && !perceptionChanged) {
+            log(agentDir, 'triage', `0ms — cron/heartbeat → skip (rule: lastThink=${lastThink}s, no perception change)`);
+            respond(res, 200, { ok: true, action: 'skip', reason: `cron heartbeat redundant — Kuro thought ${lastThink}s ago, no change`, latencyMs: 0, method: 'rule' });
+            return;
+          }
+        }
+
         // Direct message triage — classify as instant (fast /api/ask) or wake (full OODA)
         const directMessageTriggers = ['telegram', 'room', 'chat'];
         if (directMessageTriggers.includes(trigger)) {
