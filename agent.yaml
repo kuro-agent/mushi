@@ -15,9 +15,6 @@ model:
 
 loop:
   sense_interval: 5s        # Layer 1: fast perception poll (no LLM)
-  interval: 10s             # legacy — unused in two-layer mode
-  min_interval: 5s          # legacy
-  max_interval: 5m          # legacy
 
 perception:
   - name: filesystem
@@ -64,7 +61,6 @@ context:
   perception: 35            # perception signals
   memory: 25                # relevant memory
   conversation: 20          # recent exchanges
-  buffer: 5                 # safety margin
 
 memory:
   dir: ./memory

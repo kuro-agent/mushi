@@ -8,10 +8,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentConfig, ParsedAction } from './types.js';
-import { parseInterval, log } from './utils.js';
-
-const KURO_ROOM_URL = 'http://localhost:3001/api/room';
-const KURO_CHAT_URL = 'http://localhost:3001/chat';
+import { parseInterval, log, escalateToKuro as sendToKuro } from './utils.js';
 
 // Cross-cycle escalation dedup: track recent escalations with timestamps
 const recentEscalations = new Map<string, number>(); // text → timestamp
@@ -46,6 +43,14 @@ export function saveDedupState(): void {
   } catch { /* best effort */ }
 }
 
+function parseAttrs(attrStr: string): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  const re = /(\w+)="([^"]*)"/g;
+  let m;
+  while ((m = re.exec(attrStr))) attrs[m[1]!] = m[2]!;
+  return attrs;
+}
+
 export function parseTags(response: string): ParsedAction[] {
   const actions: ParsedAction[] = [];
   const regex = /<agent:(\w+)([^>]*)>([\s\S]*?)<\/agent:\1>/g;
@@ -53,25 +58,13 @@ export function parseTags(response: string): ParsedAction[] {
   let match;
   while ((match = regex.exec(response)) !== null) {
     const [, tag, attrStr, content] = match;
-    const attrs: Record<string, string> = {};
-    const attrRegex = /(\w+)="([^"]*)"/g;
-    let attrMatch;
-    while ((attrMatch = attrRegex.exec(attrStr!)) !== null) {
-      attrs[attrMatch[1]!] = attrMatch[2]!;
-    }
-    actions.push({ tag: tag!, content: content!.trim(), attrs });
+    actions.push({ tag: tag!, content: content!.trim(), attrs: parseAttrs(attrStr!) });
   }
 
   const selfClosing = /<agent:(\w+)([^/]*?)\/>/g;
   while ((match = selfClosing.exec(response)) !== null) {
     const [, tag, attrStr] = match;
-    const attrs: Record<string, string> = {};
-    const attrRegex = /(\w+)="([^"]*)"/g;
-    let attrMatch;
-    while ((attrMatch = attrRegex.exec(attrStr!)) !== null) {
-      attrs[attrMatch[1]!] = attrMatch[2]!;
-    }
-    actions.push({ tag: tag!, content: '', attrs });
+    actions.push({ tag: tag!, content: '', attrs: parseAttrs(attrStr!) });
   }
 
   return actions;
@@ -156,30 +149,7 @@ export function dispatch(
         const text = `[mushi] ${raw}`;
         log(agentDir, 'escalate', text);
         // Fire-and-forget: try room API, fallback to /chat inbox
-        fetch(KURO_ROOM_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from: 'mushi', text }),
-          signal: AbortSignal.timeout(5000),
-        }).then(async r => {
-          if (r.ok) {
-            log(agentDir, 'escalate', 'delivered to kuro (room)');
-          } else {
-            // Room API rejected (e.g. 'mushi' not in allowed senders) — use inbox
-            const fb = await fetch(KURO_CHAT_URL, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ message: text }),
-              signal: AbortSignal.timeout(5000),
-            });
-            log(agentDir, 'escalate', fb.ok ? 'delivered to kuro (inbox)' : `inbox failed: ${fb.status}`);
-          }
-        }).catch(() => {
-          log(agentDir, 'escalate', 'kuro unreachable — logging locally');
-          const alertPath = join(agentDir, 'logs', 'escalations.jsonl');
-          const entry = JSON.stringify({ ts: new Date().toISOString(), text: action.content });
-          try { writeFileSync(alertPath, entry + '\n', { flag: 'a' }); } catch { /* */ }
-        });
+        sendToKuro(text, agentDir);
         break;
       }
 

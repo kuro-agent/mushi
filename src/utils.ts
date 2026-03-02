@@ -2,7 +2,7 @@
  * mushi — pure utility functions (no state, no side effects except logging)
  */
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export function simpleHash(str: string): string {
@@ -34,6 +34,45 @@ export function truncateToTokens(text: string, maxTokens: number): string {
   if (estimated <= maxTokens) return text;
   const ratio = maxTokens / estimated;
   return text.slice(0, Math.floor(text.length * ratio)) + '\n...(truncated)';
+}
+
+const KURO_ROOM_URL = 'http://localhost:3001/api/room';
+const KURO_CHAT_URL = 'http://localhost:3001/chat';
+
+/**
+ * Fire-and-forget: send text to Kuro via room API, fallback to /chat inbox,
+ * fallback to local escalations.jsonl log.
+ * Caller is responsible for formatting text (e.g. prefixing "[mushi] ").
+ */
+export function escalateToKuro(text: string, agentDir: string): void {
+  fetch(KURO_ROOM_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: 'mushi', text }),
+    signal: AbortSignal.timeout(5000),
+  }).then(async r => {
+    if (!r.ok) {
+      await fetch(KURO_CHAT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text }),
+        signal: AbortSignal.timeout(5000),
+      });
+    }
+  }).catch(() => {
+    const alertPath = join(agentDir, 'logs', 'escalations.jsonl');
+    const entry = JSON.stringify({ ts: new Date().toISOString(), text });
+    try { appendFileSync(alertPath, entry + '\n'); } catch { /* */ }
+  });
+}
+
+export function parseJsonFromLLM<T>(result: string, fallback: T): T {
+  try {
+    const jsonMatch = result.match(/\{[\s\S]*\}/);
+    return jsonMatch ? JSON.parse(jsonMatch[0]) as T : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export function log(agentDir: string, tag: string, msg: string): void {

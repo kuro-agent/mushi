@@ -6,9 +6,11 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AgentConfig, PerceptionSignal, Message } from './types.js';
-import { log } from './utils.js';
+import { log, parseJsonFromLLM } from './utils.js';
 import { callModel } from './model.js';
 import { getRoomWatcherStatus } from './room-watcher.js';
+
+const DIRECT_MESSAGE_SOURCES = ['telegram', 'room', 'chat'] as const;
 
 export interface ServerDeps {
   config: AgentConfig;
@@ -85,7 +87,6 @@ export function startServer(port: number, deps: ServerDeps): void {
             lastRun: new Date(s.lastRun).toISOString(),
           })),
         },
-        loop: { interval: config.loop.interval },
         conversation: { messages: deps.getConversationHistory().length },
       });
       return;
@@ -169,8 +170,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         }
 
         // Direct message triage — classify as instant (fast /api/ask) or wake (full OODA)
-        const directMessageTriggers = ['telegram', 'room', 'chat'];
-        if (directMessageTriggers.includes(trigger)) {
+        if ((DIRECT_MESSAGE_SOURCES as readonly string[]).includes(trigger)) {
           // No message text → can't classify, default to wake
           if (!metadata?.messageText) {
             respond(res, 200, { ok: true, action: 'wake', reason: 'direct message without text — defaulting to wake', latencyMs: 0, method: 'rule' });
@@ -202,13 +202,10 @@ export function startServer(port: number, deps: ServerDeps): void {
           const result = await callModel(config.model, agentDir, instantPrompt, msgInput);
           const latencyMs = Date.now() - start;
 
-          let parsed: { action?: string; reason?: string };
-          try {
-            const jsonMatch = result.match(/\{[\s\S]*\}/);
-            parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { action: 'wake', reason: 'parse failed — defaulting to wake' };
-          } catch {
-            parsed = { action: 'wake', reason: 'parse failed — defaulting to wake' };
-          }
+          const parsed = parseJsonFromLLM<{ action?: string; reason?: string }>(
+            result,
+            { action: 'wake', reason: 'parse failed — defaulting to wake' },
+          );
 
           // Validate action — only allow instant or wake
           const action = parsed.action === 'instant' ? 'instant' : 'wake';
@@ -243,13 +240,10 @@ export function startServer(port: number, deps: ServerDeps): void {
         const result = await callModel(config.model, agentDir, triagePrompt, input);
         const latencyMs = Date.now() - start;
 
-        let parsed: { action?: string; reason?: string };
-        try {
-          const jsonMatch = result.match(/\{[\s\S]*\}/);
-          parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { action: 'wake', reason: 'parse failed — defaulting to wake' };
-        } catch {
-          parsed = { action: 'wake', reason: 'parse failed — defaulting to wake' };
-        }
+        const parsed = parseJsonFromLLM<{ action?: string; reason?: string }>(
+          result,
+          { action: 'wake', reason: 'parse failed — defaulting to wake' },
+        );
 
         log(agentDir, 'triage', `${latencyMs}ms — ${trigger}/${source ?? '?'} → ${parsed.action}`);
         respond(res, 200, { ok: true, action: parsed.action ?? 'wake', reason: parsed.reason ?? '', latencyMs, method: 'llm' });
@@ -336,13 +330,10 @@ export function startServer(port: number, deps: ServerDeps): void {
         const result = await callModel(config.model, agentDir, dedupPrompt, input);
         const latencyMs = Date.now() - start;
 
-        let parsed: { isDuplicate?: boolean; matchedIndex?: number; similarity?: number; reason?: string };
-        try {
-          const jsonMatch = result.match(/\{[\s\S]*\}/);
-          parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { isDuplicate: false };
-        } catch {
-          parsed = { isDuplicate: false, reason: 'parse failed — allowing write' };
-        }
+        const parsed = parseJsonFromLLM<{ isDuplicate?: boolean; matchedIndex?: number; similarity?: number; reason?: string }>(
+          result,
+          { isDuplicate: false, reason: 'parse failed — allowing write' },
+        );
 
         const matchedEntry = parsed.matchedIndex != null && parsed.matchedIndex >= 0 && existing[parsed.matchedIndex]
           ? existing[parsed.matchedIndex]!.slice(0, 100)
@@ -393,13 +384,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         const result = await callModel(config.model, agentDir, systemPrompt, dialogue);
         const latencyMs = Date.now() - start;
 
-        let parsed: Record<string, unknown>;
-        try {
-          const jsonMatch = result.match(/\{[\s\S]*\}/);
-          parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { raw: result };
-        } catch {
-          parsed = { raw: result };
-        }
+        const parsed = parseJsonFromLLM<Record<string, unknown>>(result, { raw: result });
 
         log(agentDir, 'consensus', `${latencyMs}ms — converged: ${parsed.converged ?? 'unknown'}`);
         respond(res, 200, { ok: true, latencyMs, ...parsed });
@@ -436,8 +421,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         }
 
         // Hard rule: direct messages
-        const directSources = ['telegram', 'room', 'chat'];
-        if (directSources.includes(sourceLower)) {
+        if ((DIRECT_MESSAGE_SOURCES as readonly string[]).includes(sourceLower)) {
           const trimmed = content.trim();
           // Acknowledgements → P2 not urgent
           if (/^(ok|好|沒問題|收到|understood|got it|thanks|謝|了解)[\s!.。！]*$/i.test(trimmed)) {
@@ -482,7 +466,7 @@ export function startServer(port: number, deps: ServerDeps): void {
           '',
           'urgent: needs response within minutes (not hours)',
           'deep: needs full thinking cycle (vs quick answer)',
-          directSources.includes(sourceLower) ? '\nNote: this is a direct message — lean towards urgent=true' : '',
+          (DIRECT_MESSAGE_SOURCES as readonly string[]).includes(sourceLower) ? '\nNote: this is a direct message — lean towards urgent=true' : '',
         ].filter(Boolean).join('\n');
 
         const input = [
@@ -495,13 +479,10 @@ export function startServer(port: number, deps: ServerDeps): void {
         const result = await callModel(config.model, agentDir, classifyPrompt, input);
         const latencyMs = Date.now() - start;
 
-        let parsed: { priority?: string; urgent?: boolean; deep?: boolean; reason?: string };
-        try {
-          const jsonMatch = result.match(/\{[\s\S]*\}/);
-          parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { priority: 'P1', urgent: false, deep: true, reason: 'parse failed' };
-        } catch {
-          parsed = { priority: 'P1', urgent: false, deep: true, reason: 'parse failed' };
-        }
+        const parsed = parseJsonFromLLM<{ priority?: string; urgent?: boolean; deep?: boolean; reason?: string }>(
+          result,
+          { priority: 'P1', urgent: false, deep: true, reason: 'parse failed' },
+        );
 
         const validPriorities = ['P0', 'P1', 'P2', 'P3'];
         const priority = validPriorities.includes(parsed.priority ?? '') ? parsed.priority! : 'P1';
@@ -578,13 +559,10 @@ export function startServer(port: number, deps: ServerDeps): void {
         const result = await callModel(config.model, agentDir, continuationPrompt, input);
         const latencyMs = Date.now() - start;
 
-        let parsed: { shouldContinue?: boolean; deep?: boolean; reason?: string };
-        try {
-          const jsonMatch = result.match(/\{[\s\S]*\}/);
-          parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { shouldContinue: false, reason: 'parse failed' };
-        } catch {
-          parsed = { shouldContinue: false, reason: 'parse failed' };
-        }
+        const parsed = parseJsonFromLLM<{ shouldContinue?: boolean; deep?: boolean; reason?: string }>(
+          result,
+          { shouldContinue: false, reason: 'parse failed' },
+        );
 
         log(agentDir, 'continuation', `${latencyMs}ms — ${parsed.shouldContinue ? 'CONTINUE' : 'rest'}: ${parsed.reason ?? ''}`);
         respond(res, 200, {

@@ -20,7 +20,7 @@ import { simpleHash, parseInterval, log } from './utils.js';
  * Classify the nature of a perception change.
  * Compares old and new content to determine if the change is meaningful.
  */
-export function classifyChange(oldContent: string, newContent: string): SignalStrength {
+function classifyChange(oldContent: string, newContent: string): SignalStrength {
   if (oldContent === newContent) return 'noise';
 
   // Strip all numbers and compare — if identical, only numbers changed

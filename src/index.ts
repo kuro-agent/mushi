@@ -14,7 +14,7 @@ import { join, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 
 import type { AgentConfig, PerceptionSignal, Message } from './types.js';
-import { parseInterval, estimateTokens, truncateToTokens, log } from './utils.js';
+import { parseInterval, estimateTokens, truncateToTokens, log, escalateToKuro as sendToKuro } from './utils.js';
 import { perceive, runPlugin } from './perception.js';
 import { callModel } from './model.js';
 import { parseTags, dispatch, initDedupState, saveDedupState } from './dispatcher.js';
@@ -298,35 +298,11 @@ async function think(num: number, signals: PerceptionSignal[]): Promise<void> {
 
 // ─── Auto-Escalation (system-level, no LLM needed) ──────
 
-const KURO_ROOM = 'http://localhost:3001/api/room';
-const KURO_CHAT = 'http://localhost:3001/chat';
-
 function escalateToKuro(text: string): void {
   const fullText = `[mushi] ${text}`;
   log(agentDir, 'auto-escalate', fullText);
   escalationCount++;
-
-  // Try room API first, fallback to /chat inbox
-  fetch(KURO_ROOM, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: 'mushi', text: fullText }),
-    signal: AbortSignal.timeout(5000),
-  }).then(async r => {
-    if (!r.ok) {
-      await fetch(KURO_CHAT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: fullText }),
-        signal: AbortSignal.timeout(5000),
-      });
-    }
-  }).catch(() => {
-    // Kuro unreachable — log locally
-    const alertPath = join(agentDir, 'logs', 'escalations.jsonl');
-    const entry = JSON.stringify({ ts: new Date().toISOString(), text });
-    try { writeFileSync(alertPath, entry + '\n', { flag: 'a' }); } catch { /* */ }
-  });
+  sendToKuro(fullText, agentDir);
 }
 
 const autoEscalateDedup = new Map<string, number>(); // message → timestamp

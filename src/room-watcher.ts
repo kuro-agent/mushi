@@ -8,7 +8,7 @@
 
 import type { ModelConfig } from './types.js';
 import { callModel } from './model.js';
-import { log } from './utils.js';
+import { log, parseJsonFromLLM } from './utils.js';
 
 // ─── Config ─────────────────────────────────────────────
 
@@ -206,13 +206,10 @@ async function analyzeAndPost(
   const latencyMs = Date.now() - start;
 
   // Parse response
-  let parsed: { status?: string; observation?: string; suggestion?: string | null };
-  try {
-    const jsonMatch = result.match(/\{[\s\S]*\}/);
-    parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { status: 'unknown', observation: result };
-  } catch {
-    parsed = { status: 'unknown', observation: result.slice(0, 200) };
-  }
+  const parsed = parseJsonFromLLM<{ status?: string; observation?: string; suggestion?: string | null }>(
+    result,
+    { status: 'unknown', observation: result.slice(0, 200) },
+  );
 
   log(agentDir, 'room-watcher', `analysis: ${parsed.status} (${latencyMs}ms)`);
 
