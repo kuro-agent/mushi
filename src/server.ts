@@ -18,7 +18,7 @@ interface TrailEntry {
   ts: string;
   agent: 'kuro' | 'mushi';
   type: 'focus' | 'cite' | 'triage' | 'scout';
-  decision?: 'wake' | 'skip';
+  decision?: 'wake' | 'skip' | 'quick';
   topics: string[];
   detail: string;
   decay_h: number;
@@ -47,7 +47,7 @@ function writeTrailEntry(entry: TrailEntry): void {
 }
 
 function trailFromTriage(trigger: string, source: string | undefined, action: string, reason: string, method: string): void {
-  const decision = action === 'skip' ? 'skip' as const : 'wake' as const;
+  const decision = (action === 'skip' ? 'skip' : action === 'quick' ? 'quick' : 'wake') as 'skip' | 'quick' | 'wake';
   const topics: string[] = [];
   if (trigger) topics.push(trigger);
   if (source) {
@@ -62,7 +62,7 @@ function trailFromTriage(trigger: string, source: string | undefined, action: st
     decision,
     topics,
     detail: `[${method}] ${reason}`.slice(0, 200),
-    decay_h: decision === 'skip' ? 1 : 4,
+    decay_h: decision === 'skip' ? 1 : decision === 'quick' ? 2 : 4,
   });
 }
 
@@ -277,9 +277,14 @@ export function startServer(port: number, deps: ServerDeps): void {
 
         // LLM triage for ambiguous cases (workspace, cron, heartbeat, etc.)
         const triagePrompt = [
-          'You classify trigger events for an AI agent. Decide: should this trigger start a full thinking cycle (expensive) or be skipped (noise)?',
+          'You classify trigger events for an AI agent into three levels: skip (noise), quick (lightweight check), or wake (full thinking cycle).',
           '',
-          'Respond with JSON only: {"action": "wake" or "skip", "reason": "one line"}',
+          'Respond with JSON only: {"action": "skip" or "quick" or "wake", "reason": "one line"}',
+          '',
+          'Three choices:',
+          '- skip: not worth thinking about (noise, repeated, no real change)',
+          '- quick: worth checking but doesn\'t need deep analysis (~5K tokens, 5-15s). For status checks, minor perception changes, routine confirmations.',
+          '- wake: needs full thinking cycle (~50K tokens, 60-120s). For new tasks, complex decisions, multi-step actions, learning.',
           '',
           'Key metadata fields:',
           '- lastThinkAgo: seconds since last thinking cycle',
@@ -291,12 +296,14 @@ export function startServer(port: number, deps: ServerDeps): void {
           '- workspace changes from auto-commit (agent\'s own changes) → skip',
           '- workspace changes from external edits → wake',
           '- cron heartbeat with no overdue tasks → skip',
-          '- cron with overdue tasks → wake',
+          '- cron with overdue tasks → quick (check and confirm, rarely needs full cycle)',
+          '- cron source scan or learning tasks → wake',
           '- startup/bootstrap → wake',
           '- heartbeat when lastThinkAgo < 300 (5min) AND perceptionChangedCount <= 1 → skip',
-          '- heartbeat when lastThinkAgo > 900 (15min) → wake (enough time for perception to accumulate)',
+          '- heartbeat when lastThinkAgo > 900 (15min) AND perceptionChangedCount <= 2 → quick (enough gap, check status)',
+          '- heartbeat when lastThinkAgo > 900 (15min) AND perceptionChangedCount >= 3 → wake (many changes accumulated)',
           '- heartbeat when perceptionChangedCount >= 3 → lean wake (many environment changes)',
-          '- heartbeat when lastActionType="idle" AND perceptionChangedCount >= 2 → wake (last cycle was idle but environment changed)',
+          '- heartbeat when lastActionType="idle" AND perceptionChangedCount >= 2 → quick (idle but some change, worth a quick look)',
         ].join('\n');
 
         const input = [
@@ -314,9 +321,13 @@ export function startServer(port: number, deps: ServerDeps): void {
           { action: 'wake', reason: 'parse failed — defaulting to wake' },
         );
 
-        log(agentDir, 'triage', `${latencyMs}ms — ${trigger}/${source ?? '?'} → ${parsed.action}`);
-        trailFromTriage(trigger, source, parsed.action ?? 'wake', parsed.reason ?? '', 'llm');
-        respond(res, 200, { ok: true, action: parsed.action ?? 'wake', reason: parsed.reason ?? '', latencyMs, method: 'llm' });
+        // Validate action — only allow skip, quick, wake
+        const validActions = ['skip', 'quick', 'wake'];
+        const action = validActions.includes(parsed.action ?? '') ? parsed.action! : 'wake';
+
+        log(agentDir, 'triage', `${latencyMs}ms — ${trigger}/${source ?? '?'} → ${action}`);
+        trailFromTriage(trigger, source, action, parsed.reason ?? '', 'llm');
+        respond(res, 200, { ok: true, action, reason: parsed.reason ?? '', latencyMs, method: 'llm' });
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'unknown';
         log(agentDir, 'error', `triage failed: ${msg}`);
