@@ -156,6 +156,19 @@ export function startServer(port: number, deps: ServerDeps): void {
           return;
         }
 
+        // Continuation detection — recent action + short interval = continuation cycle.
+        // When Kuro just acted (<90s ago) and the action was productive (not idle),
+        // this is almost certainly a <kuro:schedule next="now" /> continuation.
+        // These are the #1 source of false negatives (45/70 FNs in shadow analysis).
+        const meta = metadata as Record<string, unknown> | undefined;
+        const lastThinkAgo = meta?.lastThinkAgo as number | undefined;
+        const lastActionType = meta?.lastActionType as string | undefined;
+        if (lastThinkAgo !== undefined && lastThinkAgo < 90 && lastActionType === 'action') {
+          log(agentDir, 'triage', `0ms — ${trigger} → wake (rule: continuation, lastAction=${lastThinkAgo}s ago)`);
+          respond(res, 200, { ok: true, action: 'wake', reason: `continuation detected — last action ${lastThinkAgo}s ago`, latencyMs: 0, method: 'rule' });
+          return;
+        }
+
         // Cron optimization — skip redundant HEARTBEAT checks when Kuro recently thought
         // HEARTBEAT.md is checked in every OODA cycle, so a cron HEARTBEAT check is redundant
         // if Kuro thought recently. perceptionChanged is too coarse (timestamps always change),
