@@ -2,13 +2,69 @@
  * mushi — HTTP server (health, status, perception, inbox)
  */
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, writeFileSync, appendFileSync, readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AgentConfig, PerceptionSignal, Message } from './types.js';
 import { log, parseJsonFromLLM } from './utils.js';
 import { callModel } from './model.js';
 import { getRoomWatcherStatus } from './room-watcher.js';
+
+// =============================================================================
+// Trail — Shared Attention History (mushi side)
+// =============================================================================
+
+interface TrailEntry {
+  ts: string;
+  agent: 'kuro' | 'mushi';
+  type: 'focus' | 'cite' | 'triage' | 'scout';
+  decision?: 'wake' | 'skip';
+  topics: string[];
+  detail: string;
+  decay_h: number;
+}
+
+const TRAIL_MAX_ENTRIES = 500;
+
+function getTrailPath(): string {
+  const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+  return join(homeDir, '.mini-agent', 'trail.jsonl');
+}
+
+function writeTrailEntry(entry: TrailEntry): void {
+  try {
+    const filePath = getTrailPath();
+    const dir = dirname(filePath);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    appendFileSync(filePath, JSON.stringify(entry) + '\n', 'utf-8');
+    // Ring buffer trim
+    const content = readFileSync(filePath, 'utf-8');
+    const lines = content.trim().split('\n').filter(Boolean);
+    if (lines.length > TRAIL_MAX_ENTRIES) {
+      writeFileSync(filePath, lines.slice(-TRAIL_MAX_ENTRIES).join('\n') + '\n', 'utf-8');
+    }
+  } catch { /* fire-and-forget */ }
+}
+
+function trailFromTriage(trigger: string, source: string | undefined, action: string, reason: string, method: string): void {
+  const decision = action === 'skip' ? 'skip' as const : 'wake' as const;
+  const topics: string[] = [];
+  if (trigger) topics.push(trigger);
+  if (source) {
+    // Extract meaningful topic from source string
+    const clean = source.replace(/\(.*?\)/g, '').trim().toLowerCase();
+    if (clean && clean !== trigger) topics.push(clean);
+  }
+  writeTrailEntry({
+    ts: new Date().toISOString(),
+    agent: 'mushi',
+    type: 'triage',
+    decision,
+    topics,
+    detail: `[${method}] ${reason}`.slice(0, 200),
+    decay_h: decision === 'skip' ? 1 : 4,
+  });
+}
 
 const DIRECT_MESSAGE_SOURCES = ['telegram', 'room', 'chat'] as const;
 
@@ -152,6 +208,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         // Use `trigger` (clean keyword like "alert") not `source` (may have extra text like "alert (yielded, waited 264s)")
         const alwaysWake = ['alert', 'mobile'];
         if (alwaysWake.includes(trigger)) {
+          trailFromTriage(trigger, source, 'wake', `${trigger} always wakes`, 'rule');
           respond(res, 200, { ok: true, action: 'wake', reason: `${trigger} always wakes`, latencyMs: 0, method: 'rule' });
           return;
         }
@@ -165,6 +222,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         const lastActionType = meta?.lastActionType as string | undefined;
         if (lastThinkAgo !== undefined && lastThinkAgo < 90 && lastActionType === 'action') {
           log(agentDir, 'triage', `0ms — ${trigger} → wake (rule: continuation, lastAction=${lastThinkAgo}s ago)`);
+          trailFromTriage(trigger, source, 'wake', `continuation detected — last action ${lastThinkAgo}s ago`, 'rule');
           respond(res, 200, { ok: true, action: 'wake', reason: `continuation detected — last action ${lastThinkAgo}s ago`, latencyMs: 0, method: 'rule' });
           return;
         }
@@ -177,6 +235,7 @@ export function startServer(port: number, deps: ServerDeps): void {
           const lastThink = metadata?.lastThinkAgo ?? Infinity;
           if (lastThink < 1500) {
             log(agentDir, 'triage', `0ms — cron/heartbeat → skip (rule: lastThink=${lastThink}s < 25min)`);
+            trailFromTriage(trigger, source, 'skip', `cron heartbeat redundant — Kuro thought ${lastThink}s ago`, 'rule');
             respond(res, 200, { ok: true, action: 'skip', reason: `cron heartbeat redundant — Kuro thought ${lastThink}s ago`, latencyMs: 0, method: 'rule' });
             return;
           }
@@ -186,6 +245,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         if ((DIRECT_MESSAGE_SOURCES as readonly string[]).includes(trigger)) {
           // No message text → can't classify, default to wake
           if (!metadata?.messageText) {
+            trailFromTriage(trigger, source, 'wake', 'direct message without text — defaulting to wake', 'rule');
             respond(res, 200, { ok: true, action: 'wake', reason: 'direct message without text — defaulting to wake', latencyMs: 0, method: 'rule' });
             return;
           }
@@ -224,6 +284,7 @@ export function startServer(port: number, deps: ServerDeps): void {
           const action = parsed.action === 'instant' ? 'instant' : 'wake';
 
           log(agentDir, 'triage', `${latencyMs}ms — DM ${trigger} → ${action}: ${metadata.messageText.slice(0, 80)}`);
+          trailFromTriage(trigger, source, action, parsed.reason ?? '', 'llm');
           respond(res, 200, { ok: true, action, reason: parsed.reason ?? '', latencyMs, method: 'llm' });
           return;
         }
@@ -268,11 +329,13 @@ export function startServer(port: number, deps: ServerDeps): void {
         );
 
         log(agentDir, 'triage', `${latencyMs}ms — ${trigger}/${source ?? '?'} → ${parsed.action}`);
+        trailFromTriage(trigger, source, parsed.action ?? 'wake', parsed.reason ?? '', 'llm');
         respond(res, 200, { ok: true, action: parsed.action ?? 'wake', reason: parsed.reason ?? '', latencyMs, method: 'llm' });
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'unknown';
         log(agentDir, 'error', `triage failed: ${msg}`);
         // On error, always wake (fail-open)
+        // trail not written in catch — trigger/source may not be parsed
         respond(res, 200, { ok: true, action: 'wake', reason: `triage error: ${msg}`, latencyMs: 0, method: 'error' });
       }
       return;
