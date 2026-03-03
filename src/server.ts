@@ -234,13 +234,22 @@ export function startServer(port: number, deps: ServerDeps): void {
           '',
           'Respond with JSON only: {"action": "wake" or "skip", "reason": "one line"}',
           '',
+          'Key metadata fields:',
+          '- lastThinkAgo: seconds since last thinking cycle',
+          '- lastActionType: "action" (did something), "idle" (no action), "none" (first cycle)',
+          '- perceptionChangedCount: number of perception sections that changed since last build',
+          '- perceptionChanged: boolean (any change at all)',
+          '',
           'Guidelines:',
           '- workspace changes from auto-commit (agent\'s own changes) → skip',
           '- workspace changes from external edits → wake',
           '- cron heartbeat with no overdue tasks → skip',
           '- cron with overdue tasks → wake',
           '- startup/bootstrap → wake',
-          '- heartbeat when last think was recent (<5min) and nothing changed → skip',
+          '- heartbeat when lastThinkAgo < 300 (5min) AND perceptionChangedCount <= 1 → skip',
+          '- heartbeat when lastThinkAgo > 900 (15min) → wake (enough time for perception to accumulate)',
+          '- heartbeat when perceptionChangedCount >= 3 → lean wake (many environment changes)',
+          '- heartbeat when lastActionType="idle" AND perceptionChangedCount >= 2 → wake (last cycle was idle but environment changed)',
         ].join('\n');
 
         const input = [
