@@ -664,6 +664,66 @@ export function startServer(port: number, deps: ServerDeps): void {
       return;
     }
 
+    // ─── Acknowledge Pattern — Kuro marks a pattern as known/harmless ──
+    if (req.method === 'POST' && url.pathname === '/api/acknowledge-pattern') {
+      try {
+        const body = await readBody(req);
+        const { pattern, ttlHours, reason } = JSON.parse(body) as {
+          pattern?: string; ttlHours?: number; reason?: string;
+        };
+        if (!pattern) {
+          respond(res, 400, { error: 'pattern is required' });
+          return;
+        }
+        const ttl = Math.min(Math.max(ttlHours ?? 6, 1), 48); // 1-48h, default 6h
+        const ackPath = join(agentDir, 'logs', 'acknowledged-patterns.json');
+        let patterns: Array<{ pattern: string; acknowledgedAt: number; expiresAt: number; reason?: string }> = [];
+        try {
+          if (existsSync(ackPath)) {
+            patterns = JSON.parse(readFileSync(ackPath, 'utf-8'));
+          }
+        } catch { /* start fresh */ }
+
+        const now = Date.now();
+        // Clean expired + upsert
+        patterns = patterns.filter(p => now < p.expiresAt && p.pattern.toLowerCase() !== pattern.toLowerCase());
+        patterns.push({ pattern, acknowledgedAt: now, expiresAt: now + ttl * 3600000, reason });
+        writeFileSync(ackPath, JSON.stringify(patterns, null, 2));
+
+        log(agentDir, 'acknowledge', `pattern "${pattern}" acknowledged for ${ttl}h: ${reason ?? 'no reason'}`);
+        respond(res, 200, { ok: true, pattern, ttlHours: ttl, expiresAt: new Date(now + ttl * 3600000).toISOString() });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'unknown';
+        respond(res, 400, { error: msg });
+      }
+      return;
+    }
+
+    // ─── List Acknowledged Patterns ──────────────────────
+    if (req.method === 'GET' && url.pathname === '/api/acknowledge-pattern') {
+      try {
+        const ackPath = join(agentDir, 'logs', 'acknowledged-patterns.json');
+        let patterns: Array<{ pattern: string; acknowledgedAt: number; expiresAt: number; reason?: string }> = [];
+        try {
+          if (existsSync(ackPath)) {
+            patterns = JSON.parse(readFileSync(ackPath, 'utf-8'));
+          }
+        } catch { /* empty */ }
+        const now = Date.now();
+        const active = patterns.filter(p => now < p.expiresAt);
+        respond(res, 200, { ok: true, patterns: active.map(p => ({
+          pattern: p.pattern,
+          reason: p.reason,
+          acknowledgedAt: new Date(p.acknowledgedAt).toISOString(),
+          expiresAt: new Date(p.expiresAt).toISOString(),
+          remainingHours: Math.round((p.expiresAt - now) / 3600000 * 10) / 10,
+        }))});
+      } catch (err) {
+        respond(res, 500, { error: err instanceof Error ? err.message : 'unknown' });
+      }
+      return;
+    }
+
     respond(res, 404, { error: 'not found' });
   });
 

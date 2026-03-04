@@ -11,8 +11,55 @@ import type { AgentConfig, ParsedAction } from './types.js';
 import { parseInterval, log, escalateToKuro as sendToKuro } from './utils.js';
 
 // Cross-cycle escalation dedup: track recent escalations with timestamps
-const recentEscalations = new Map<string, number>(); // text → timestamp
-const ESCALATION_DEDUP_WINDOW = 60 * 60 * 1000; // 1 hour (was 30min, extended to survive restarts)
+// Uses normalized text as key to catch variations of the same pattern
+const recentEscalations = new Map<string, number>(); // normalizedText → timestamp
+const ESCALATION_DEDUP_WINDOW = 60 * 60 * 1000; // 1 hour
+
+/**
+ * Normalize escalation text for dedup comparison.
+ * Strips variable parts (report counts, durations, numbers) so that
+ * "poll error (second report, escalating)" and "poll error (fifth report, escalating)"
+ * match as the same pattern.
+ */
+function normalizeEscalation(text: string): string {
+  return text
+    .replace(/\s*\((?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d+(?:st|nd|rd|th)?)\s+report[^)]*\)/gi, '')
+    .replace(/\b\d+\s*(ms|s|min|minutes?|hours?|h|days?|d)\b/gi, 'N$1')
+    .replace(/\b\d+\s+(times?|occurrences?|errors?|failures?)\b/gi, 'N $1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Acknowledged patterns — patterns Kuro has confirmed as known/harmless.
+ * Stored in {agentDir}/logs/acknowledged-patterns.json with TTL.
+ */
+interface AcknowledgedPattern {
+  pattern: string;
+  acknowledgedAt: number;
+  expiresAt: number;
+  reason?: string;
+}
+
+function loadAcknowledgedPatterns(agentDir: string): AcknowledgedPattern[] {
+  try {
+    const path = join(agentDir, 'logs', 'acknowledged-patterns.json');
+    if (!existsSync(path)) return [];
+    const data = JSON.parse(readFileSync(path, 'utf-8')) as AcknowledgedPattern[];
+    return data.filter(p => Date.now() < p.expiresAt);
+  } catch { return []; }
+}
+
+function matchAcknowledgedPattern(text: string, agentDir: string): string | null {
+  const patterns = loadAcknowledgedPatterns(agentDir);
+  const lower = text.toLowerCase();
+  for (const p of patterns) {
+    if (lower.includes(p.pattern.toLowerCase())) {
+      return p.reason ?? p.pattern;
+    }
+  }
+  return null;
+}
 
 // Persist dedup state across restarts
 let dedupStatePath = '';
@@ -128,15 +175,22 @@ export function dispatch(
           log(agentDir, 'escalate', `filtered (noise): ${raw.slice(0, 60)}`);
           break;
         }
+        // Acknowledged pattern check: skip if Kuro already confirmed this as known
+        const ackReason = matchAcknowledgedPattern(raw, agentDir);
+        if (ackReason) {
+          log(agentDir, 'escalate', `filtered (acknowledged: ${ackReason}): ${raw.slice(0, 60)}`);
+          break;
+        }
         // Dedup: skip identical escalations within same dispatch (LLM repetition)
         if (seenEscalations.has(raw)) {
           log(agentDir, 'escalate', `filtered (duplicate): ${raw.slice(0, 60)}`);
           break;
         }
         seenEscalations.add(raw);
-        // Cross-cycle dedup: skip if same text was escalated within 30min window
+        // Cross-cycle dedup: use normalized text to catch variations of the same pattern
+        const normalized = normalizeEscalation(raw);
         const now = Date.now();
-        const lastSent = recentEscalations.get(raw);
+        const lastSent = recentEscalations.get(normalized);
         if (lastSent && now - lastSent < ESCALATION_DEDUP_WINDOW) {
           log(agentDir, 'escalate', `filtered (recent, ${Math.round((now - lastSent) / 60000)}min ago): ${raw.slice(0, 60)}`);
           break;
@@ -145,7 +199,7 @@ export function dispatch(
         for (const [k, v] of recentEscalations) {
           if (now - v > ESCALATION_DEDUP_WINDOW) recentEscalations.delete(k);
         }
-        recentEscalations.set(raw, now);
+        recentEscalations.set(normalized, now);
         const text = `[mushi] ${raw}`;
         log(agentDir, 'escalate', text);
         // Fire-and-forget: try room API, fallback to /chat inbox
