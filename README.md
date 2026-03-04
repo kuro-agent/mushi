@@ -167,7 +167,7 @@ perception:
 
 ## In Production: System 1 Triage
 
-mushi runs as a **triage layer** for [Kuro](https://kuro.page), a 24/7 autonomous AI agent. When a trigger fires, mushi decides in ~800ms whether the expensive reasoning brain (Claude Sonnet) should wake up — or skip the cycle entirely.
+mushi runs as a **triage layer** for [Kuro](https://kuro.page), a 24/7 autonomous AI agent. When a trigger fires, mushi decides in ~800ms whether the expensive reasoning brain (Claude Opus) should wake up — or skip the cycle entirely.
 
 ```
 Trigger → mushi (Llama 3.1 8B, ~800ms) → skip / wake
@@ -178,7 +178,7 @@ Trigger → mushi (Llama 3.1 8B, ~800ms) → skip / wake
 **Production data (600+ triage decisions):**
 - **59% skip rate** — nearly 6 in 10 cycles filtered before the expensive model runs
 - **Zero false negatives** — no important event was ever missed
-- **~3M tokens/day saved** — at Sonnet pricing, roughly $9/day
+- **~3M tokens/day saved** — at Opus pricing, roughly $25/day
 - Hard rules handle 40% of decisions in 0ms (direct messages always wake, recent-think always skips)
 - LLM triage averages 700-1100ms per decision
 
