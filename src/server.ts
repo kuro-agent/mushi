@@ -206,7 +206,7 @@ export function startServer(port: number, deps: ServerDeps): void {
 
         // Hard rules — bypass LLM for obvious cases
         // Use `trigger` (clean keyword like "alert") not `source` (may have extra text like "alert (yielded, waited 264s)")
-        const alwaysWake = ['alert', 'mobile'];
+        const alwaysWake = ['alert', 'mobile', 'startup'];
         if (alwaysWake.includes(trigger)) {
           trailFromTriage(trigger, source, 'wake', `${trigger} always wakes`, 'rule');
           respond(res, 200, { ok: true, action: 'wake', reason: `${trigger} always wakes`, latencyMs: 0, method: 'rule' });
