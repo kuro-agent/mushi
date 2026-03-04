@@ -227,6 +227,21 @@ export function startServer(port: number, deps: ServerDeps): void {
           }
         }
 
+        // Heartbeat optimization — skip when Kuro thought recently and environment barely changed
+        // Data-driven: 265/429 LLM skips (62%) match this exact pattern, costing ~773ms each.
+        // Converting to 0ms hard rule saves ~205s of HC1 compute per log period.
+        if (trigger === 'heartbeat') {
+          const lastThink = metadata?.lastThinkAgo ?? Infinity;
+          const changedCount = (metadata as Record<string, unknown>)?.perceptionChangedCount as number ?? Infinity;
+          if (lastThink < 300 && changedCount <= 1) {
+            const reason = `heartbeat skip — lastThink=${lastThink}s < 5min, changes=${changedCount} <= 1`;
+            log(agentDir, 'triage', `0ms — heartbeat → skip (rule: ${reason})`);
+            trailFromTriage(trigger, source, 'skip', reason, 'rule');
+            respond(res, 200, { ok: true, action: 'skip', reason, latencyMs: 0, method: 'rule' });
+            return;
+          }
+        }
+
         // Direct message triage — classify as instant (fast /api/ask) or wake (full OODA)
         if ((DIRECT_MESSAGE_SOURCES as readonly string[]).includes(trigger)) {
           // No message text → can't classify, default to wake
