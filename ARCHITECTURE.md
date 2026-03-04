@@ -81,35 +81,41 @@ The key insight: **mushi doesn't make the decision. mushi decides whether a deci
 
 ## Real-World Data (5 Days, Feb 28 — Mar 4, 2026)
 
+*Production data — active mode, not shadow. Every "skip" is a real prevented OODA cycle.*
+
 ### Triage Volume
 
-| Date | Triggers | Skipped | Waked | Skip Rate |
-|------|----------|---------|-------|-----------|
-| Feb 28 | 50 | 17 | 30 | 34% |
-| Mar 1 | 133 | 97 | 35 | 73% |
-| Mar 2 | 115 | 95 | 16 | 83% |
-| Mar 3 | 198 | 97 | 98 | 49% |
-| Mar 4 | 68 | 13 | 49 | 19% |
-| **Total** | **549** | **319** | **228** | **58%** |
+| Date | Triggers | Skipped | Waked | Quick | Skip Rate |
+|------|----------|---------|-------|-------|-----------|
+| Feb 28 | 47 | 17 | 30 | 0 | 36% |
+| Mar 1 | 132 | 97 | 35 | 0 | 74% |
+| Mar 2 | 111 | 95 | 16 | 0 | 86% |
+| Mar 3 | 195 | 97 | 98 | 0 | 50% |
+| Mar 4 | 137 | 60 | 57 | 20 | 44% |
+| **Total** | **622** | **366** | **236** | **20** | **59%** |
 
-296 full OODA cycles were actually prevented.
+366 full OODA cycles prevented. 20 additional handled via lightweight quick cycle (foreground lane, minimal context).
 
 ### Behavioral Patterns
 
-- **Quiet days** (Mar 2): 83% skip rate — most triggers are routine heartbeats, mushi correctly identifies nothing actionable
-- **Active days** (Mar 3): 49% skip rate — human messages and real changes bring skip rate down, which is correct behavior
-- **High-activity sessions** (Mar 4 morning): 19% skip rate — extensive system upgrades, every trigger had real content
+- **Quiet days** (Mar 2): 86% skip rate — most triggers are routine heartbeats, mushi correctly identifies nothing actionable
+- **Active days** (Mar 3-4): 44-50% skip rate — human messages and real changes bring skip rate down, which is correct behavior
+- **First day** (Feb 28, partial): 36% skip — cold start, conservative
 
 mushi's skip rate naturally adapts to activity level without any manual tuning.
+
+### Three-Tier Decisions (Mar 4)
+
+Quick cycle is a new tier between skip and full wake — uses foreground lane with cached perception data instead of full OODA. Handles "probably fine, but worth a glance" triggers at ~5% the cost of a full cycle.
 
 ### Method Distribution
 
 | Method | Count | Latency | Cost |
 |--------|-------|---------|------|
-| Hard rules | 103 | 0ms | $0 |
-| LLM triage | 446 | ~800ms avg | $0 (local) |
+| Hard rules | 129 | 0ms | $0 |
+| LLM triage | 493 | ~780ms avg (219-2618ms) | $0 (local) |
 
-19% of decisions are resolved by rules alone — zero latency, zero computation.
+21% of decisions are resolved by rules alone — zero latency, zero computation.
 
 ### Safety Record
 
@@ -123,10 +129,23 @@ Critical events are protected by hard rules, not by the LLM. The LLM only triage
 
 ### Token Savings Estimate
 
-- Average OODA cycle: ~50K input tokens
-- Cycles prevented: 296
-- Estimated savings: **~14.8M tokens over 5 days (~3M/day)**
+- Average OODA cycle prompt: ~50K chars ≈ 15K tokens (input) + ~1K tokens (output)
+- Full cycles prevented: 366
+- Quick cycles (partial savings): 20
+- Estimated savings: **~5.9M input tokens + ~366K output tokens over 5 days**
+- Daily average: **~1.2M input tokens/day saved**
 - mushi cost: $0 (Taalas HC1 hardware, amortized)
+
+### Trigger Source Breakdown
+
+| Source | Triage Count | Primary Decision |
+|--------|-------------|------------------|
+| Heartbeat | 439 (71%) | Mostly skip — routine health checks |
+| Cron | 117 (19%) | Skip if recent think, wake otherwise |
+| Startup | 62 (10%) | Always wake (hard rule) |
+| Alert | 4 (<1%) | Always wake (hard rule) |
+
+Heartbeat is the dominant source — and the most filterable. 71% of all triggers are heartbeats, and most are correctly skipped because nothing changed since last think.
 
 ## Why Not Just... ?
 
