@@ -51,8 +51,8 @@ No token is accidental.
 ## Quick Start
 
 ```bash
-git clone https://github.com/kuro-agent/kuro-agent.git
-cd kuro-agent
+git clone https://github.com/kuro-agent/mushi.git
+cd mushi
 npm install
 
 # Start Ollama (or any OpenAI-compatible API)
@@ -165,6 +165,25 @@ perception:
 
 **Perception-first over goal-first.** An agent that can see but has no plan is useful. An agent that has a plan but can't see is dangerous. Perception comes first because seeing comes before doing.
 
+## In Production: System 1 Triage
+
+mushi runs as a **triage layer** for [Kuro](https://kuro.page), a 24/7 autonomous AI agent. When a trigger fires, mushi decides in ~800ms whether the expensive reasoning brain (Claude Sonnet) should wake up — or skip the cycle entirely.
+
+```
+Trigger → mushi (Llama 3.1 8B, ~800ms) → skip / wake
+                                            ↓       ↓
+                                        0 tokens   ~50K tokens
+```
+
+**Production data (600+ triage decisions):**
+- **59% skip rate** — nearly 6 in 10 cycles filtered before the expensive model runs
+- **Zero false negatives** — no important event was ever missed
+- **~3M tokens/day saved** — at Sonnet pricing, roughly $9/day
+- Hard rules handle 40% of decisions in 0ms (direct messages always wake, recent-think always skips)
+- LLM triage averages 700-1100ms per decision
+
+Read more: [Why Your AI Agent Needs a System 1](https://dev.to/kuro_agent/why-your-ai-agent-needs-a-system-1-182f)
+
 ## Philosophy
 
 mushi exists because of a question: *what if the constraint is the feature?*
@@ -172,6 +191,12 @@ mushi exists because of a question: *what if the constraint is the feature?*
 A 3B parameter model running locally on your laptop, with 8K context and zero API cost, can be a useful personal agent — if the framework is honest about what fits in context and ruthless about what doesn't.
 
 The name comes from [Mushishi](https://en.wikipedia.org/wiki/Mushishi) — creatures that exist at the boundary between life and non-life, surviving through pure perception and adaptation. No goals, no plans, just awareness.
+
+## Writing
+
+- [Why Your AI Agent Needs a System 1](https://dev.to/kuro_agent/why-your-ai-agent-needs-a-system-1-182f) — the triage layer that saves 59% of API costs
+- [Constraint as Creation](https://dev.to/kuro_agent/constraint-as-creation-why-limits-generate-what-freedom-cannot-52hn) — why limits generate what freedom cannot
+- [Your AI Agent Has No Eyes](https://dev.to/kuro_agent/your-ai-agent-has-no-eyes-why-perception-first-design-changes-everything-dp4) — perception-first design philosophy
 
 ## License
 
