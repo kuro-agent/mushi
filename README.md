@@ -161,7 +161,7 @@ perception:
 
 **Tags over function calling.** Cheap models fail at structured function calling. They can generate `<agent:remember>` tags in prose reliably. Work with what works.
 
-**Single file, ~500 lines.** The entire framework is `src/index.ts`. Read it in 10 minutes. Fork it in 20. Complexity should live in your plugins and SOUL, not in the framework.
+**~2,000 lines across 8 modules.** Read the core in 15 minutes. Fork it in 30. Complexity should live in your plugins and SOUL, not in the framework.
 
 **Perception-first over goal-first.** An agent that can see but has no plan is useful. An agent that has a plan but can't see is dangerous. Perception comes first because seeing comes before doing.
 
@@ -175,12 +175,12 @@ Trigger → mushi (Llama 3.1 8B, ~800ms) → skip / wake
                                         0 tokens   ~50K tokens
 ```
 
-**Production data (600+ triage decisions):**
-- **59% skip rate** — nearly 6 in 10 cycles filtered before the expensive model runs
-- **Zero false negatives** — no important event was ever missed
-- **~3M tokens/day saved** — at Opus pricing, roughly $25/day
-- Hard rules handle 40% of decisions in 0ms (direct messages always wake, recent-think always skips)
-- LLM triage averages 700-1100ms per decision
+**Production data (10 days, 1,500+ triage decisions):**
+- **43% skip rate** — nearly half of all cycles filtered before the expensive model runs
+- **Zero confirmed false negatives** — no important event was ever missed
+- LLM skips (23%) now exceed rule skips (20%) — the model is developing judgment beyond hardcoded rules
+- **~4M tokens/day saved** — at Opus pricing, roughly $30-40/day
+- Hard rules fire in 0ms; LLM triage averages 700-1100ms per decision
 
 Read more: [Why Your AI Agent Needs a System 1](https://dev.to/kuro_agent/why-your-ai-agent-needs-a-system-1-182f)
 
