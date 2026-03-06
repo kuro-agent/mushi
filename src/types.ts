@@ -68,3 +68,40 @@ export interface ParsedAction {
   content: string;
   attrs: Record<string, string>;
 }
+
+// --- Generic Triage API (mushi independence) ---
+
+/** Standard event types that any agent can use */
+export type TriageEventType = 'timer' | 'message' | 'change' | 'alert' | 'scheduled' | 'startup' | 'custom';
+
+/** Generic triage request — the new primary format */
+export interface TriageRequest {
+  event: TriageEventType;
+  source?: string;
+  priority_hint?: 'high' | 'normal' | 'low';
+  context?: Record<string, unknown>;
+  rules?: TriageRule[];
+}
+
+/** Legacy triage request — mini-agent format, still supported */
+export interface LegacyTriageRequest {
+  trigger: string;
+  source?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** Configurable triage rule */
+export interface TriageRule {
+  match: Record<string, unknown>;
+  action: 'wake' | 'skip' | 'quick';
+  reason: string;
+}
+
+/** Unified triage response */
+export interface TriageResponse {
+  ok: true;
+  action: 'wake' | 'skip' | 'quick' | 'instant';
+  reason: string;
+  latencyMs: number;
+  method: 'rule' | 'llm' | 'error';
+}

@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, writeFileSync, appendFileSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import type { AgentConfig, PerceptionSignal, Message } from './types.js';
+import type { AgentConfig, PerceptionSignal, Message, TriageRequest, LegacyTriageRequest, TriageEventType } from './types.js';
 import { log, parseJsonFromLLM } from './utils.js';
 import { callModel } from './model.js';
 import { getRoomWatcherStatus } from './room-watcher.js';
@@ -67,6 +67,68 @@ function trailFromTriage(trigger: string, source: string | undefined, action: st
 }
 
 const DIRECT_MESSAGE_SOURCES = ['telegram', 'room', 'chat'] as const;
+
+// --- Request normalization: legacy → generic ---
+
+const LEGACY_TRIGGER_MAP: Record<string, TriageEventType> = {
+  heartbeat: 'timer',
+  cron: 'scheduled',
+  workspace: 'change',
+  alert: 'alert',
+  startup: 'startup',
+  mobile: 'alert',
+  telegram: 'message',
+  room: 'message',
+  chat: 'message',
+};
+
+interface NormalizedTriage {
+  event: TriageEventType;
+  source?: string;
+  priority_hint?: 'high' | 'normal' | 'low';
+  context: Record<string, unknown>;
+  rules?: Array<{ match: Record<string, unknown>; action: 'wake' | 'skip' | 'quick'; reason: string }>;
+  _legacy?: LegacyTriageRequest;  // preserved for backwards compat in hard rules
+}
+
+function normalizeTriage(body: Record<string, unknown>): NormalizedTriage {
+  // New format: has `event` field
+  if (body.event && typeof body.event === 'string') {
+    const req = body as unknown as TriageRequest;
+    return {
+      event: req.event,
+      source: req.source,
+      priority_hint: req.priority_hint,
+      context: req.context ?? {},
+      rules: req.rules,
+    };
+  }
+
+  // Legacy format: has `trigger` field
+  if (body.trigger && typeof body.trigger === 'string') {
+    const legacy = body as unknown as LegacyTriageRequest;
+    const meta = (legacy.metadata ?? {}) as Record<string, unknown>;
+    const event = LEGACY_TRIGGER_MAP[legacy.trigger] ?? 'custom';
+
+    // Map legacy metadata to generic context
+    const context: Record<string, unknown> = { ...meta };
+    if (meta.lastThinkAgo != null) context.idle_seconds = meta.lastThinkAgo;
+    if (meta.perceptionChangedCount != null) context.changes_count = meta.perceptionChangedCount;
+    if (meta.messageText != null) context.message_text = meta.messageText;
+    if (meta.inboxEmpty != null) context.inbox_empty = meta.inboxEmpty;
+    if (meta.hasOverdueTasks != null) context.has_overdue_tasks = meta.hasOverdueTasks;
+
+    return {
+      event,
+      source: legacy.source,
+      context,
+      _legacy: legacy,
+    };
+  }
+
+  // Unknown format — treat as custom wake
+  return { event: 'custom', context: body };
+}
 
 export interface ServerDeps {
   config: AgentConfig;
@@ -194,72 +256,104 @@ export function startServer(port: number, deps: ServerDeps): void {
     if (req.method === 'POST' && url.pathname === '/api/triage') {
       try {
         const body = await readBody(req);
-        const { trigger, source, metadata } = JSON.parse(body) as {
-          trigger?: string;
-          source?: string;
-          metadata?: { inboxEmpty?: boolean; lastThinkAgo?: number; hasOverdueTasks?: boolean; messageText?: string; metsukeActivePatterns?: string[]; metsukeRecentCategories?: string[] };
-        };
-        if (!trigger) {
-          respond(res, 400, { error: 'trigger type is required' });
+        const rawBody = JSON.parse(body) as Record<string, unknown>;
+
+        // Normalize: accept both legacy (trigger/source/metadata) and new (event/context) format
+        const norm = normalizeTriage(rawBody);
+
+        // Validate: need at least an event type
+        if (!norm.event) {
+          respond(res, 400, { error: 'event type is required (or legacy: trigger)' });
           return;
         }
 
-        // Hard rules — bypass LLM for obvious cases
-        // Use `trigger` (clean keyword like "alert") not `source` (may have extra text like "alert (yielded, waited 264s)")
-        const alwaysWake = ['alert', 'mobile', 'startup'];
-        if (alwaysWake.includes(trigger)) {
-          trailFromTriage(trigger, source, 'wake', `${trigger} always wakes`, 'rule');
-          respond(res, 200, { ok: true, action: 'wake', reason: `${trigger} always wakes`, latencyMs: 0, method: 'rule' });
-          return;
-        }
+        // For trail/logging compatibility, derive trigger name
+        const trigger = norm._legacy?.trigger ?? norm.event;
+        const source = norm.source;
+        const metadata = norm._legacy?.metadata as { inboxEmpty?: boolean; lastThinkAgo?: number; hasOverdueTasks?: boolean; messageText?: string; metsukeActivePatterns?: string[]; metsukeRecentCategories?: string[] } | undefined;
 
-        // Cron optimization — skip redundant HEARTBEAT checks when Kuro recently thought
-        // HEARTBEAT.md is checked in every OODA cycle, so a cron HEARTBEAT check is redundant
-        // if Kuro thought recently. perceptionChanged is too coarse (timestamps always change),
-        // so we only check lastThinkAgo with a 25min threshold (cron runs every 30min).
-        if (trigger === 'cron' && source && /heartbeat|pending.tasks/i.test(source)) {
-          const lastThink = metadata?.lastThinkAgo ?? Infinity;
-          if (lastThink < 1500) {
-            log(agentDir, 'triage', `0ms — cron/heartbeat → skip (rule: lastThink=${lastThink}s < 25min)`);
-            trailFromTriage(trigger, source, 'skip', `cron heartbeat redundant — Kuro thought ${lastThink}s ago`, 'rule');
-            respond(res, 200, { ok: true, action: 'skip', reason: `cron heartbeat redundant — Kuro thought ${lastThink}s ago`, latencyMs: 0, method: 'rule' });
-            return;
+        // --- User-provided rules (new format) ---
+        if (norm.rules?.length) {
+          for (const rule of norm.rules) {
+            const matches = Object.entries(rule.match).every(([k, v]) => {
+              const ctx = norm.context[k];
+              if (typeof v === 'string' && v.startsWith('<') && typeof ctx === 'number') {
+                return ctx < Number(v.slice(1));
+              }
+              if (typeof v === 'string' && v.startsWith('>') && typeof ctx === 'number') {
+                return ctx > Number(v.slice(1));
+              }
+              if (k === 'event') return norm.event === v;
+              return ctx === v;
+            });
+            if (matches) {
+              trailFromTriage(trigger, source, rule.action, rule.reason, 'rule');
+              respond(res, 200, { ok: true, action: rule.action, reason: rule.reason, latencyMs: 0, method: 'rule' });
+              return;
+            }
           }
         }
 
-        // Metsuke avoidance override — if Kuro has active avoidance patterns, don't skip heartbeats
-        // This forces a full cycle so the coach/metsuke feedback can intervene
-        const avoidancePatterns = metadata?.metsukeActivePatterns ?? [];
-        const hasAvoidance = avoidancePatterns.some(p =>
-          ['Learning as Avoidance', 'Planning Loop', 'Conservative Default', 'Comfort Zone Retreat'].includes(p),
-        );
-        if (hasAvoidance && trigger === 'heartbeat') {
-          const reason = `metsuke avoidance override — active patterns: ${avoidancePatterns.join(', ')}`;
-          log(agentDir, 'triage', `0ms — heartbeat → wake (rule: ${reason})`);
-          trailFromTriage(trigger, source, 'wake', reason, 'rule');
-          respond(res, 200, { ok: true, action: 'wake', reason, latencyMs: 0, method: 'rule' });
+        // --- Built-in hard rules ---
+
+        // Alert/startup always wake
+        if (norm.event === 'alert' || norm.event === 'startup') {
+          trailFromTriage(trigger, source, 'wake', `${norm.event} always wakes`, 'rule');
+          respond(res, 200, { ok: true, action: 'wake', reason: `${norm.event} always wakes`, latencyMs: 0, method: 'rule' });
           return;
         }
 
-        // Heartbeat optimization — skip when Kuro thought recently and environment barely changed
-        // Data-driven: 265/429 LLM skips (62%) match this exact pattern, costing ~773ms each.
-        // Converting to 0ms hard rule saves ~205s of HC1 compute per log period.
-        if (trigger === 'heartbeat') {
-          const lastThink = metadata?.lastThinkAgo ?? Infinity;
-          const changedCount = (metadata as Record<string, unknown>)?.perceptionChangedCount as number ?? Infinity;
-          if (lastThink < 300 && changedCount <= 1) {
-            const reason = `heartbeat skip — lastThink=${lastThink}s < 5min, changes=${changedCount} <= 1`;
-            log(agentDir, 'triage', `0ms — heartbeat → skip (rule: ${reason})`);
+        // Legacy compat: mobile always wake
+        if (trigger === 'mobile') {
+          trailFromTriage(trigger, source, 'wake', 'mobile always wakes', 'rule');
+          respond(res, 200, { ok: true, action: 'wake', reason: 'mobile always wakes', latencyMs: 0, method: 'rule' });
+          return;
+        }
+
+        const idleSeconds = (norm.context.idle_seconds as number) ?? (metadata?.lastThinkAgo as number) ?? Infinity;
+        const changesCount = (norm.context.changes_count as number) ?? (metadata as Record<string, unknown>)?.perceptionChangedCount as number ?? Infinity;
+
+        // Scheduled heartbeat-like check: skip if recently active
+        if (norm.event === 'scheduled' && source && /heartbeat|pending.tasks/i.test(source)) {
+          if (idleSeconds < 1500) {
+            const reason = `scheduled heartbeat redundant — last active ${idleSeconds}s ago`;
+            log(agentDir, 'triage', `0ms — scheduled/heartbeat → skip (rule: ${reason})`);
             trailFromTriage(trigger, source, 'skip', reason, 'rule');
             respond(res, 200, { ok: true, action: 'skip', reason, latencyMs: 0, method: 'rule' });
             return;
           }
         }
 
-        // Direct message triage — classify as instant (fast /api/ask) or wake (full OODA)
-        if ((DIRECT_MESSAGE_SOURCES as readonly string[]).includes(trigger)) {
+        // Metsuke avoidance override (legacy compat — mini-agent specific)
+        const avoidancePatterns = (metadata?.metsukeActivePatterns ?? norm.context.avoidance_patterns as string[]) ?? [];
+        const hasAvoidance = avoidancePatterns.some((p: string) =>
+          ['Learning as Avoidance', 'Planning Loop', 'Conservative Default', 'Comfort Zone Retreat'].includes(p),
+        );
+        if (hasAvoidance && norm.event === 'timer') {
+          const reason = `avoidance override — active patterns: ${avoidancePatterns.join(', ')}`;
+          log(agentDir, 'triage', `0ms — timer → wake (rule: ${reason})`);
+          trailFromTriage(trigger, source, 'wake', reason, 'rule');
+          respond(res, 200, { ok: true, action: 'wake', reason, latencyMs: 0, method: 'rule' });
+          return;
+        }
+
+        // Timer optimization — skip when recently active and environment barely changed
+        if (norm.event === 'timer' && idleSeconds < 300 && changesCount <= 1) {
+          const reason = `timer skip — idle=${idleSeconds}s < 5min, changes=${changesCount} <= 1`;
+          log(agentDir, 'triage', `0ms — timer → skip (rule: ${reason})`);
+          trailFromTriage(trigger, source, 'skip', reason, 'rule');
+          respond(res, 200, { ok: true, action: 'skip', reason, latencyMs: 0, method: 'rule' });
+          return;
+        }
+
+        // Direct message triage — classify as instant or wake
+        const isDirectMessage = norm.event === 'message' || (DIRECT_MESSAGE_SOURCES as readonly string[]).includes(trigger);
+        if (isDirectMessage) {
+          // Extract message text from either format
+          const messageText = (norm.context.message_text as string) ?? metadata?.messageText;
+
           // No message text → can't classify, default to wake
-          if (!metadata?.messageText) {
+          if (!messageText) {
             trailFromTriage(trigger, source, 'wake', 'direct message without text — defaulting to wake', 'rule');
             respond(res, 200, { ok: true, action: 'wake', reason: 'direct message without text — defaulting to wake', latencyMs: 0, method: 'rule' });
             return;
@@ -284,7 +378,7 @@ export function startServer(port: number, deps: ServerDeps): void {
             '- Questions about external topics needing web lookup',
           ].join('\n');
 
-          const msgInput = `Message: ${metadata.messageText.slice(0, 500)}`;
+          const msgInput = `Message: ${messageText.slice(0, 500)}`;
 
           const start = Date.now();
           const result = await callModel(config.model, agentDir, instantPrompt, msgInput);
@@ -298,7 +392,7 @@ export function startServer(port: number, deps: ServerDeps): void {
           // Validate action — only allow instant or wake
           const action = parsed.action === 'instant' ? 'instant' : 'wake';
 
-          log(agentDir, 'triage', `${latencyMs}ms — DM ${trigger} → ${action}: ${metadata.messageText.slice(0, 80)}`);
+          log(agentDir, 'triage', `${latencyMs}ms — DM ${trigger} → ${action}: ${messageText.slice(0, 80)}`);
           trailFromTriage(trigger, source, action, parsed.reason ?? '', 'llm');
           respond(res, 200, { ok: true, action, reason: parsed.reason ?? '', latencyMs, method: 'llm' });
           return;
@@ -337,9 +431,9 @@ export function startServer(port: number, deps: ServerDeps): void {
         ].join('\n');
 
         const input = [
-          `Trigger: ${trigger}`,
+          `Event: ${norm.event}`,
           source ? `Source: ${source}` : '',
-          metadata ? `Metadata: ${JSON.stringify(metadata)}` : '',
+          `Context: ${JSON.stringify(norm.context)}`,
         ].filter(Boolean).join('\n');
 
         const start = Date.now();
