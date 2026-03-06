@@ -49,6 +49,13 @@ perception:
     category: sentinel
     trigger: true
 
+  - name: line-sync
+    script: ./plugins/line-sync.sh
+    interval: 300s
+    category: system
+    # data sync: saves LINE chat snapshots to ~/.mini-agent/line-sync/
+    # no trigger — pure sync, zero LLM cost
+
   - name: clock
     script: ./plugins/clock.sh
     interval: 300s

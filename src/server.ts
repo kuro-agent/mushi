@@ -197,7 +197,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         const { trigger, source, metadata } = JSON.parse(body) as {
           trigger?: string;
           source?: string;
-          metadata?: { inboxEmpty?: boolean; lastThinkAgo?: number; hasOverdueTasks?: boolean; messageText?: string };
+          metadata?: { inboxEmpty?: boolean; lastThinkAgo?: number; hasOverdueTasks?: boolean; messageText?: string; metsukeActivePatterns?: string[]; metsukeRecentCategories?: string[] };
         };
         if (!trigger) {
           respond(res, 400, { error: 'trigger type is required' });
@@ -225,6 +225,20 @@ export function startServer(port: number, deps: ServerDeps): void {
             respond(res, 200, { ok: true, action: 'skip', reason: `cron heartbeat redundant — Kuro thought ${lastThink}s ago`, latencyMs: 0, method: 'rule' });
             return;
           }
+        }
+
+        // Metsuke avoidance override — if Kuro has active avoidance patterns, don't skip heartbeats
+        // This forces a full cycle so the coach/metsuke feedback can intervene
+        const avoidancePatterns = metadata?.metsukeActivePatterns ?? [];
+        const hasAvoidance = avoidancePatterns.some(p =>
+          ['Learning as Avoidance', 'Planning Loop', 'Conservative Default', 'Comfort Zone Retreat'].includes(p),
+        );
+        if (hasAvoidance && trigger === 'heartbeat') {
+          const reason = `metsuke avoidance override — active patterns: ${avoidancePatterns.join(', ')}`;
+          log(agentDir, 'triage', `0ms — heartbeat → wake (rule: ${reason})`);
+          trailFromTriage(trigger, source, 'wake', reason, 'rule');
+          respond(res, 200, { ok: true, action: 'wake', reason, latencyMs: 0, method: 'rule' });
+          return;
         }
 
         // Heartbeat optimization — skip when Kuro thought recently and environment barely changed
@@ -319,6 +333,7 @@ export function startServer(port: number, deps: ServerDeps): void {
           '- heartbeat when lastThinkAgo > 900 (15min) AND perceptionChangedCount >= 3 → wake (many changes accumulated)',
           '- heartbeat when perceptionChangedCount >= 3 → lean wake (many environment changes)',
           '- heartbeat when lastActionType="idle" AND perceptionChangedCount >= 2 → quick (idle but some change, worth a quick look)',
+          '- if metsukeActivePatterns contains avoidance patterns (Learning as Avoidance, Planning Loop, etc.) → lean wake (agent needs coaching intervention)',
         ].join('\n');
 
         const input = [
