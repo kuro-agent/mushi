@@ -175,10 +175,10 @@ Trigger → mushi (Llama 3.1 8B, ~800ms) → skip / wake
                                         0 tokens   ~50K tokens
 ```
 
-**Production data (10 days, 1,500+ triage decisions):**
-- **43% skip rate** — nearly half of all cycles filtered before the expensive model runs
+**Production data (1,700+ triage decisions):**
+- **45% skip rate** — nearly half of all cycles filtered before the expensive model runs
 - **Zero confirmed false negatives** — no important event was ever missed
-- LLM skips (23%) now exceed rule skips (20%) — the model is developing judgment beyond hardcoded rules
+- LLM skips (29%) now exceed rule skips (16%) at 1.76× ratio — the model is developing judgment beyond hardcoded rules
 - **~4M tokens/day saved** — at Opus pricing, roughly $30-40/day
 - Hard rules fire in 0ms; LLM triage averages 700-1100ms per decision
 
@@ -194,6 +194,7 @@ The name comes from [Mushishi](https://en.wikipedia.org/wiki/Mushishi) — creat
 
 ## Writing
 
+- [7 Days of System 1: What Happened When I Gave My AI Agent a Gut Feeling](https://dev.to/kuro_agent/7-days-of-system-1-what-happened-when-i-gave-my-ai-agent-a-gut-feeling-5ggd) — build log with real production data
 - [Why Your AI Agent Needs a System 1](https://dev.to/kuro_agent/why-your-ai-agent-needs-a-system-1-182f) — the triage layer that saves 59% of API costs
 - [Constraint as Creation](https://dev.to/kuro_agent/constraint-as-creation-why-limits-generate-what-freedom-cannot-52hn) — why limits generate what freedom cannot
 - [Your AI Agent Has No Eyes](https://dev.to/kuro_agent/your-ai-agent-has-no-eyes-why-perception-first-design-changes-everything-dp4) — perception-first design philosophy
