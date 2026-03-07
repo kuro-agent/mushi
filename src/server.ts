@@ -788,6 +788,104 @@ export function startServer(port: number, deps: ServerDeps): void {
       return;
     }
 
+    // ─── Route — Cognitive Mesh task routing coordinator (Phase 5) ──
+    if (req.method === 'POST' && url.pathname === '/api/route') {
+      try {
+        const body = await readBody(req);
+        const { trigger, cluster } = JSON.parse(body) as {
+          trigger: string;
+          cluster: {
+            primaryBusy: boolean;
+            queueDepth: number;
+            totalInstances: number;
+            maxInstances: number;
+            specialists: Array<{ id: string; perspective?: string; status: string }>;
+          };
+        };
+
+        const triggerBase = trigger.replace('trigger:', '');
+
+        // Hard rule: direct messages → always self
+        const directSources = ['telegram', 'telegram-user', 'room', 'chat'];
+        if (directSources.includes(triggerBase)) {
+          log(agentDir, 'route', `0ms — self (rule: direct message ${triggerBase})`);
+          respond(res, 200, { ok: true, route: 'self', reason: 'identity-required', latencyMs: 0, method: 'rule' });
+          return;
+        }
+
+        // Hard rule: alert → always self
+        if (triggerBase === 'alert') {
+          log(agentDir, 'route', '0ms — self (rule: alert)');
+          respond(res, 200, { ok: true, route: 'self', reason: 'alert-handling', latencyMs: 0, method: 'rule' });
+          return;
+        }
+
+        // Hard rule: primary not busy → self
+        if (!cluster.primaryBusy) {
+          log(agentDir, 'route', '0ms — self (rule: primary idle)');
+          respond(res, 200, { ok: true, route: 'self', reason: 'primary-idle', latencyMs: 0, method: 'rule' });
+          return;
+        }
+
+        // Hard rule: idle specialist available → forward
+        const idle = cluster.specialists.find(s => s.status === 'idle');
+        if (idle) {
+          log(agentDir, 'route', `0ms — forward to ${idle.id} (rule: idle specialist)`);
+          respond(res, 200, { ok: true, route: 'forward', target: idle.id, perspective: idle.perspective, reason: 'idle-specialist', latencyMs: 0, method: 'rule' });
+          return;
+        }
+
+        // Hard rule: at max instances → queue
+        if (cluster.totalInstances >= cluster.maxInstances) {
+          log(agentDir, 'route', '0ms — queue (rule: at max instances)');
+          respond(res, 200, { ok: true, route: 'queue', reason: 'max-instances-reached', latencyMs: 0, method: 'rule' });
+          return;
+        }
+
+        // LLM: should we spawn a new specialist?
+        const routePrompt = [
+          'You are a lightweight task router for a multi-instance AI agent.',
+          'Decide: should this trigger spawn a new specialist instance, or just queue for the primary?',
+          '',
+          'Respond with JSON only: {"route": "spawn"|"queue", "perspective": "research"|"code"|"chat", "reason": "one line"}',
+          '',
+          'SPAWN when: independent task (research, code review, web fetch) that benefits from parallel execution.',
+          'QUEUE when: short task (<30s), needs shared state, or uncertain.',
+        ].join('\n');
+
+        const input = [
+          `Trigger: ${trigger}`,
+          `Queue depth: ${cluster.queueDepth}`,
+          `Current instances: ${cluster.totalInstances}/${cluster.maxInstances}`,
+        ].join('\n');
+
+        const start = Date.now();
+        const result = await callModel(config.model, agentDir, routePrompt, input);
+        const latencyMs = Date.now() - start;
+
+        const parsed = parseJsonFromLLM<{ route?: string; perspective?: string; reason?: string }>(
+          result,
+          { route: 'queue', reason: 'parse failed' },
+        );
+
+        const route = parsed.route === 'spawn' ? 'spawn' : 'queue';
+        log(agentDir, 'route', `${latencyMs}ms — ${route} (${parsed.perspective ?? 'research'}): ${parsed.reason ?? ''}`);
+        respond(res, 200, {
+          ok: true,
+          route,
+          perspective: parsed.perspective ?? 'research',
+          reason: parsed.reason ?? '',
+          latencyMs,
+          method: 'llm',
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'unknown';
+        log(agentDir, 'error', `route failed: ${msg}`);
+        respond(res, 200, { ok: true, route: 'self', reason: `route error: ${msg}`, latencyMs: 0, method: 'error' });
+      }
+      return;
+    }
+
     // ─── Acknowledge Pattern — Kuro marks a pattern as known/harmless ──
     if (req.method === 'POST' && url.pathname === '/api/acknowledge-pattern') {
       try {
@@ -847,6 +945,8 @@ export function startServer(port: number, deps: ServerDeps): void {
       }
       return;
     }
+
+    // (duplicate /api/route removed — replaced by Phase 5 version above)
 
     respond(res, 404, { error: 'not found' });
   });
