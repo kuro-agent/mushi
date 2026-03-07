@@ -171,8 +171,9 @@ export function dispatch(
         // Quality gate: filter meaningless escalations
         const raw = action.content.replace(/<agent:\w+[^>]*>[\s\S]*?<\/agent:\w+>/g, '').trim();
         const NOISE = /\b(no\s+change|unchanged|no\s+significant|nothing\s+(new|unusual|to\s+report)|filesystem\s+unchanged)\b/i;
-        if (!raw || raw.length < 10 || NOISE.test(raw)) {
-          log(agentDir, 'escalate', `filtered (noise): ${raw.slice(0, 60)}`);
+        const TEMPLATE = /^STATE (THE|YOUR|THE SPECIFIC)/i;
+        if (!raw || raw.length < 10 || NOISE.test(raw) || TEMPLATE.test(raw)) {
+          log(agentDir, 'escalate', `filtered (${TEMPLATE.test(raw ?? '') ? 'template' : 'noise'}): ${raw.slice(0, 60)}`);
           break;
         }
         // Acknowledged pattern check: skip if Kuro already confirmed this as known
