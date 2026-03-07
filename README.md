@@ -54,6 +54,7 @@ No token is accidental.
 git clone https://github.com/kuro-agent/mushi.git
 cd mushi
 npm install
+npm run build
 
 # Start Ollama (or any OpenAI-compatible API)
 ollama pull llama3.2
