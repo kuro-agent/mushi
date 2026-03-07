@@ -2,3 +2,5 @@ node_modules
 dist/
 *.log
 logs/
+agent.production.yaml
+agent.local.yaml

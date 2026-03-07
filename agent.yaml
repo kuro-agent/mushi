@@ -1,27 +1,24 @@
-# mushi — your agent's configuration
-# Edit 'name' and 'memory/SOUL.md' to define your agent's identity.
-name: mushi
+# mushi agent configuration
+# Copy this file and customize for your setup.
+# Usage: npm start [config-file]  (default: agent.yaml)
+
+name: my-agent
 soul: ./memory/SOUL.md
 
 model:
-  provider: taalas           # taalas HC1 — llama3.1-8B, 17ms triage
-  base_url: https://chatjimmy.ai
-  model: llama3.1-8B
-  context_size: 8192        # tokens — the framework adapts to this
-  fallback:
-    provider: ollama
-    base_url: http://localhost:11434
-    model: qwen2.5:3b
+  provider: ollama
+  base_url: http://localhost:11434
+  model: llama3.2
+  context_size: 8192
 
 loop:
-  sense_interval: 5s        # Layer 1: fast perception poll (no LLM)
+  sense_interval: 5s
 
 perception:
   - name: filesystem
     script: ./plugins/fs-watch.sh
     interval: 60s
     category: workspace
-    # context-only: mtime changes are noise, provides background info
 
   - name: dev-watcher
     script: ./plugins/dev-watcher.sh
@@ -36,41 +33,19 @@ perception:
     category: communication
     trigger: true
 
-  - name: kuro-watcher
-    script: ./plugins/kuro-watcher.sh
-    interval: 30s
-    category: sentinel
-    trigger: true
-    strip_pattern: "\\d+s|Active task: \\d+"
-
-  - name: log-watcher
-    script: ./plugins/log-watcher.sh
-    interval: 60s
-    category: sentinel
-    trigger: true
-
-  - name: line-sync
-    script: ./plugins/line-sync.sh
-    interval: 300s
-    category: system
-    # data sync: saves LINE chat snapshots to ~/.mini-agent/line-sync/
-    # no trigger — pure sync, zero LLM cost
-
   - name: clock
     script: ./plugins/clock.sh
     interval: 300s
     category: system
-    # context-only: time always changes, never a reason to think
 
 context:
-  # Budget allocation (percentages of available tokens)
-  identity: 15              # SOUL.md
-  perception: 35            # perception signals
-  memory: 25                # relevant memory
-  conversation: 20          # recent exchanges
+  identity: 15
+  perception: 35
+  memory: 25
+  conversation: 20
 
 memory:
   dir: ./memory
 
 server:
-  port: 3000                    # HTTP API for interaction
+  port: 3000
