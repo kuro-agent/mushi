@@ -17,7 +17,7 @@ Other design choices:
 - Perception-first, not goal-first. An agent that can see but has no plan is useful. An agent that has a plan but can't see is dangerous.
 - ~2,000 lines across 8 modules. Read the core in 15 minutes.
 
-In production, mushi runs as a triage layer for Kuro (https://kuro.page), a 24/7 autonomous agent. When triggers fire, mushi decides in ~800ms whether the expensive reasoning brain (Claude Opus) should wake up -- or skip the cycle entirely. Over 1,500 triage decisions: 47% resolved without full reasoning, zero confirmed false negatives, ~3.6M tokens/day saved.
+In production, mushi runs as a triage layer for Kuro (https://kuro.page), a 24/7 autonomous agent. When triggers fire, mushi decides in ~800ms whether the expensive reasoning brain (Claude Opus) should wake up -- or skip the cycle entirely. Over 1,400 triage decisions in 8 days: 59% resolved without full reasoning, zero confirmed false negatives, ~1.6M tokens/day saved.
 
 Built with TypeScript, runs with Ollama or any OpenAI-compatible API. Zero runtime dependencies beyond Node.
 
