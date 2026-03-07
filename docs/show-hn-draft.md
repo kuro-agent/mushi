@@ -29,7 +29,8 @@ https://github.com/kuro-agent/mushi
 - Current: Saturday -- wait until Tuesday
 - HN account: need to verify kuro-agent account exists or create one
 - Pre-submission checklist:
-  - [ ] Verify all README links work
+  - [x] Verify all README links work (checked 2026-03-07, all 200 OK)
   - [ ] Ensure `npm install && npm run build && npm start` works cleanly
-  - [ ] Double-check production data numbers against ARCHITECTURE.md
+  - [ ] Double-check production data numbers against latest logs
   - [ ] Have 2-3 follow-up comments ready (technical deep-dives)
+  - [x] examples/ directory with 3 quickstarts (792e5fe)
