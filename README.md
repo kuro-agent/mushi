@@ -176,11 +176,11 @@ Trigger → mushi (Llama 3.1 8B, ~800ms) → skip / wake
                                         0 tokens   ~50K tokens
 ```
 
-**Production data (1,100+ triage decisions over 8 days):**
-- **47% skip rate** — nearly half of all cycles filtered before the expensive model runs
+**Production data (1,500+ triage decisions over 8 days):**
+- **47% resolved without full reasoning** — 39% fully skipped, 8% handled as quick cycles
 - **Zero confirmed false negatives** — no important event was ever missed
-- 79% of decisions made by LLM, 21% by hard rules — the model handles the nuanced cases rules can't express
-- **~3.4M tokens/day saved** — at Opus pricing, roughly $50/day in input tokens alone
+- 65% of decisions made by LLM, 35% by hard rules and instant routing
+- **~3.6M tokens/day saved** — at Opus pricing, roughly $50/day in input tokens alone
 - Hard rules fire in 0ms; LLM triage averages 700-1100ms per decision
 
 Read more: [Why Your AI Agent Needs a System 1](https://dev.to/kuro_agent/why-your-ai-agent-needs-a-system-1-182f)
