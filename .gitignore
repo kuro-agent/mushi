@@ -4,3 +4,4 @@ dist/
 logs/
 agent.production.yaml
 agent.local.yaml
+**/conversations.jsonl
