@@ -1,0 +1,39 @@
+# Minimal mushi agent — the simplest possible setup
+# Run: npm start examples/minimal/agent.yaml
+# Requires: ollama with llama3.2 (or any model)
+
+name: minimal-agent
+soul: ./examples/minimal/memory/SOUL.md
+
+model:
+  provider: ollama
+  base_url: http://localhost:11434
+  model: llama3.2
+  context_size: 8192
+
+loop:
+  sense_interval: 10s
+
+perception:
+  - name: heartbeat
+    script: ./examples/minimal/plugins/heartbeat.sh
+    interval: 30s
+    category: system
+
+  - name: inbox
+    script: ./examples/minimal/plugins/inbox.sh
+    interval: 10s
+    category: communication
+    trigger: true
+
+context:
+  identity: 20
+  perception: 30
+  memory: 25
+  conversation: 20
+
+memory:
+  dir: ./examples/minimal/memory
+
+server:
+  port: 3100

@@ -1,0 +1,45 @@
+# Journal — a reflective agent that keeps a diary of what it perceives
+# Run: npm start examples/journal/agent.yaml
+# The agent observes time, weather (if wttr.in is reachable), and its own
+# memory — then reflects. Personality comes from SOUL.md.
+
+name: journal-agent
+soul: ./examples/journal/memory/SOUL.md
+
+model:
+  provider: ollama
+  base_url: http://localhost:11434
+  model: llama3.2
+  context_size: 8192
+
+loop:
+  sense_interval: 30s
+
+perception:
+  - name: moment
+    script: ./examples/journal/plugins/moment.sh
+    interval: 300s
+    category: system
+
+  - name: weather
+    script: ./examples/journal/plugins/weather.sh
+    interval: 600s
+    category: system
+
+  - name: inbox
+    script: ./examples/journal/plugins/inbox.sh
+    interval: 10s
+    category: communication
+    trigger: true
+
+context:
+  identity: 20
+  perception: 25
+  memory: 35
+  conversation: 15
+
+memory:
+  dir: ./examples/journal/memory
+
+server:
+  port: 3102

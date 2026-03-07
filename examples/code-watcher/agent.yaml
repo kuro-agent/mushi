@@ -1,0 +1,46 @@
+# Code Watcher — an agent that observes your development workflow
+# Run: npm start examples/code-watcher/agent.yaml
+# Set WATCH_REPO to the git repo you want to monitor (default: current dir)
+
+name: code-watcher
+soul: ./examples/code-watcher/memory/SOUL.md
+
+model:
+  provider: ollama
+  base_url: http://localhost:11434
+  model: llama3.2
+  context_size: 8192
+
+loop:
+  sense_interval: 15s
+
+perception:
+  - name: git-status
+    script: ./examples/code-watcher/plugins/git-status.sh
+    interval: 30s
+    category: workspace
+    trigger: true
+    strip_pattern: "\\d+ (seconds?|minutes?|hours?|days?) ago"
+
+  - name: todo-scan
+    script: ./examples/code-watcher/plugins/todo-scan.sh
+    interval: 120s
+    category: workspace
+
+  - name: inbox
+    script: ./examples/code-watcher/plugins/inbox.sh
+    interval: 10s
+    category: communication
+    trigger: true
+
+context:
+  identity: 10
+  perception: 45
+  memory: 25
+  conversation: 15
+
+memory:
+  dir: ./examples/code-watcher/memory
+
+server:
+  port: 3101
