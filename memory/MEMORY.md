@@ -82,3 +82,5 @@
 - observe that there are 2 new file modifications, which may be a notable pattern.
 
 - There is a notable pattern of 13 recent errors in the last 1h in the log-watcher signal, which may indicate a recurring issue with Kuro's instance.
+
+- 3 timeout errors in last hour, all from Claude CLI
