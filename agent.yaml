@@ -8,7 +8,7 @@ soul: ./memory/SOUL.md
 model:
   provider: openai
   base_url: http://localhost:8000
-  model: Qwen3.5-9B-Claude-4.6-Opus-Distilled-MLX-4bit
+  model: Qwen3.5-9B-MLX-4bit
   api_key: omlx-local
   chat_template_kwargs:
     enable_thinking: false
