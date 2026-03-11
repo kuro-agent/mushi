@@ -9,13 +9,14 @@ interface ProviderConfig {
   provider: string;
   base_url: string;
   model: string;
+  api_key?: string;
 }
 
 async function callProvider(
   prov: ProviderConfig,
   messages: Message[],
 ): Promise<string> {
-  const { provider, base_url, model } = prov;
+  const { provider, base_url, model, api_key } = prov;
 
   let url: string;
   let body: Record<string, unknown>;
@@ -43,7 +44,10 @@ async function callProvider(
 
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(api_key ? { Authorization: `Bearer ${api_key}` } : {}),
+    },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(30_000),
   });
@@ -84,6 +88,7 @@ export async function callModel(
     provider: modelConfig.provider,
     base_url: modelConfig.base_url,
     model: modelConfig.model,
+    api_key: modelConfig.api_key,
   };
 
   log(agentDir, 'model', `calling ${primary.provider}/${primary.model} (context: ~${estimateTokens(context)} tokens)`);
@@ -96,7 +101,12 @@ export async function callModel(
     if (modelConfig.fallback) {
       const fb = modelConfig.fallback;
       log(agentDir, 'model', `${primary.provider} failed (${errMsg}), falling back to ${fb.provider}/${fb.model}`);
-      return await callProvider(fb, messages);
+      return await callProvider({
+        provider: fb.provider,
+        base_url: fb.base_url,
+        model: fb.model,
+        api_key: fb.api_key,
+      }, messages);
     }
 
     throw err;
