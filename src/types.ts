@@ -17,11 +17,13 @@ export interface ModelConfig {
   provider: string;
   base_url: string;
   model: string;
+  api_key?: string;
   context_size: number;
   fallback?: {
     provider: string;
     base_url: string;
     model: string;
+    api_key?: string;
   };
 }
 
