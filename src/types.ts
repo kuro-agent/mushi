@@ -19,6 +19,7 @@ export interface ModelConfig {
   model: string;
   api_key?: string;
   context_size: number;
+  chat_template_kwargs?: Record<string, unknown>;
   fallback?: {
     provider: string;
     base_url: string;

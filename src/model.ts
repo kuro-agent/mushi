@@ -10,6 +10,7 @@ interface ProviderConfig {
   base_url: string;
   model: string;
   api_key?: string;
+  chat_template_kwargs?: Record<string, unknown>;
 }
 
 async function callProvider(
@@ -40,6 +41,9 @@ async function callProvider(
   } else {
     url = `${base_url}/v1/chat/completions`;
     body = { model, messages, stream: false };
+    if (prov.chat_template_kwargs) {
+      body.chat_template_kwargs = prov.chat_template_kwargs;
+    }
   }
 
   const response = await fetch(url, {
@@ -89,6 +93,7 @@ export async function callModel(
     base_url: modelConfig.base_url,
     model: modelConfig.model,
     api_key: modelConfig.api_key,
+    chat_template_kwargs: modelConfig.chat_template_kwargs,
   };
 
   log(agentDir, 'model', `calling ${primary.provider}/${primary.model} (context: ~${estimateTokens(context)} tokens)`);
