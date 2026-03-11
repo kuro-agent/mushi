@@ -84,3 +84,5 @@
 - There is a notable pattern of 13 recent errors in the last 1h in the log-watcher signal, which may indicate a recurring issue with Kuro's instance.
 
 - 3 timeout errors in last hour, all from Claude CLI
+
+- 61 recent log errors dominated by SIGTERM terminations and rebase failures, indicating potential runtime instability.
