@@ -6,9 +6,12 @@ name: my-agent
 soul: ./memory/SOUL.md
 
 model:
-  provider: ollama
-  base_url: http://localhost:11434
-  model: llama3.2
+  provider: openai
+  base_url: http://localhost:8000
+  model: Qwen3.5-9B
+  api_key: omlx-local
+  chat_template_kwargs:
+    enable_thinking: false
   context_size: 8192
 
 loop:
