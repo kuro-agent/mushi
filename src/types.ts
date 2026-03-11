@@ -18,6 +18,7 @@ export interface ModelConfig {
   base_url: string;
   model: string;
   api_key?: string;
+  chat_template_kwargs?: Record<string, unknown>;
   context_size: number;
   chat_template_kwargs?: Record<string, unknown>;
   fallback?: {
@@ -25,6 +26,7 @@ export interface ModelConfig {
     base_url: string;
     model: string;
     api_key?: string;
+    chat_template_kwargs?: Record<string, unknown>;
   };
 }
 

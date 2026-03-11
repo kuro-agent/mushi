@@ -17,7 +17,7 @@ async function callProvider(
   prov: ProviderConfig,
   messages: Message[],
 ): Promise<string> {
-  const { provider, base_url, model, api_key } = prov;
+  const { provider, base_url, model, api_key, chat_template_kwargs } = prov;
 
   let url: string;
   let body: Record<string, unknown>;
@@ -40,10 +40,19 @@ async function callProvider(
     };
   } else {
     url = `${base_url}/v1/chat/completions`;
+<<<<<<< HEAD
     body = { model, messages, stream: false };
     if (prov.chat_template_kwargs) {
       body.chat_template_kwargs = prov.chat_template_kwargs;
     }
+=======
+    body = {
+      model,
+      messages,
+      stream: false,
+      ...(chat_template_kwargs ? { chat_template_kwargs } : {}),
+    };
+>>>>>>> feature/del-1773234710550-me7g
   }
 
   const response = await fetch(url, {
@@ -111,6 +120,7 @@ export async function callModel(
         base_url: fb.base_url,
         model: fb.model,
         api_key: fb.api_key,
+        chat_template_kwargs: fb.chat_template_kwargs,
       }, messages);
     }
 
