@@ -346,7 +346,7 @@ export function startServer(port: number, deps: ServerDeps): void {
           return;
         }
 
-        // Direct message triage — classify as instant or wake
+        // Direct message triage — classify as quick or wake
         const isDirectMessage = norm.event === 'message' || (DIRECT_MESSAGE_SOURCES as readonly string[]).includes(trigger);
         if (isDirectMessage) {
           // Extract message text from either format
@@ -359,29 +359,33 @@ export function startServer(port: number, deps: ServerDeps): void {
             return;
           }
 
-          const instantPrompt = [
-            'You classify user messages for an AI agent. Decide: can this be answered instantly from memory/status (instant), or does it need deep thinking/action (wake)?',
+          const dmPrompt = [
+            'You classify user messages for an AI agent. Decide: can this be answered quickly from memory/status (quick), or does it need deep thinking/action (wake)?',
             '',
-            'Respond with JSON only: {"action": "instant" or "wake", "reason": "one line"}',
+            'Respond with JSON only: {"action": "quick" or "wake", "reason": "one line"}',
             '',
-            'INSTANT — answer from memory, status, or simple lookup:',
+            'QUICK — lightweight response (~5K tokens, 5-15s), answer from memory/status:',
             '- Status queries: "在幹嘛", "what are you doing", "status"',
             '- Simple factual questions answerable from memory',
             '- Greetings, acknowledgements, short reactions',
-            '- "OK", "好", "understood" type messages',
+            '- "OK", "好", "understood", "收到" type messages',
+            '- Confirmations or approvals of previously discussed plans',
+            '- Simple follow-up questions on recent context',
             '',
-            'WAKE — needs full thinking cycle:',
+            'WAKE — needs full thinking cycle (~50K tokens, 60-120s):',
             '- Requests to DO something (implement, fix, create, deploy)',
             '- Complex questions requiring research or multi-step reasoning',
             '- Messages with URLs to analyze',
             '- Instructions, directives, task assignments',
             '- Questions about external topics needing web lookup',
+            '- Architecture discussions, design decisions',
+            '- Messages that reference multiple systems or require cross-referencing',
           ].join('\n');
 
           const msgInput = `Message: ${messageText.slice(0, 500)}`;
 
           const start = Date.now();
-          const result = await callModel(config.model, agentDir, instantPrompt, msgInput);
+          const result = await callModel(config.model, agentDir, dmPrompt, msgInput);
           const latencyMs = Date.now() - start;
 
           const parsed = parseJsonFromLLM<{ action?: string; reason?: string }>(
@@ -389,8 +393,8 @@ export function startServer(port: number, deps: ServerDeps): void {
             { action: 'wake', reason: 'parse failed — defaulting to wake' },
           );
 
-          // Validate action — only allow instant or wake
-          const action = parsed.action === 'instant' ? 'instant' : 'wake';
+          // Validate action — only allow quick or wake (fail-safe: wake)
+          const action = parsed.action === 'quick' ? 'quick' : 'wake';
 
           log(agentDir, 'triage', `${latencyMs}ms — DM ${trigger} → ${action}: ${messageText.slice(0, 80)}`);
           trailFromTriage(trigger, source, action, parsed.reason ?? '', 'llm');
