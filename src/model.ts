@@ -132,6 +132,7 @@ interface ProviderConfig {
   model: string;
   api_key?: string;
   chat_template_kwargs?: Record<string, unknown>;
+  max_tokens?: number;
 }
 
 async function callProvider(
@@ -139,7 +140,7 @@ async function callProvider(
   messages: Message[],
   timeoutMs = 30_000,
 ): Promise<string> {
-  const { provider, base_url, model, api_key, chat_template_kwargs } = prov;
+  const { provider, base_url, model, api_key, chat_template_kwargs, max_tokens } = prov;
 
   let url: string;
   let body: Record<string, unknown>;
@@ -166,6 +167,7 @@ async function callProvider(
       model,
       messages,
       stream: false,
+      ...(max_tokens ? { max_tokens } : {}),
       ...(chat_template_kwargs ? { chat_template_kwargs } : {}),
     };
   }
@@ -220,11 +222,15 @@ export async function callModelWithThinking(
     { role: 'user', content: prompt },
   ];
 
+  const thinkMaxTokens = enableThinking ? (modelConfig.think_max_tokens ?? 1024) : undefined;
+  const timeout = enableThinking ? (modelConfig.think_timeout ?? 600_000) : 30_000;
+
   const primary: ProviderConfig = {
     provider: modelConfig.provider,
     base_url: modelConfig.base_url,
     model: modelConfig.model,
     api_key: modelConfig.api_key,
+    max_tokens: thinkMaxTokens,
     chat_template_kwargs: {
       ...modelConfig.chat_template_kwargs,
       enable_thinking: enableThinking,
@@ -232,11 +238,10 @@ export async function callModelWithThinking(
   };
 
   const mode = enableThinking ? 'think' : 'fast';
-  const timeout = enableThinking ? 600_000 : 30_000;
   const label = `${mode}:${primary.model}`;
 
   return modelQueue.enqueue(async () => {
-    log(agentDir, 'model', `calling ${primary.provider}/${primary.model} [${mode}] (context: ~${estimateTokens(context)} tokens)`);
+    log(agentDir, 'model', `calling ${primary.provider}/${primary.model} [${mode}] (context: ~${estimateTokens(context)} tokens${thinkMaxTokens ? `, max: ${thinkMaxTokens}` : ''})`);
 
     try {
       return await callProvider(primary, messages, timeout);
@@ -251,6 +256,7 @@ export async function callModelWithThinking(
           base_url: fb.base_url,
           model: fb.model,
           api_key: fb.api_key,
+          max_tokens: thinkMaxTokens,
           chat_template_kwargs: {
             ...fb.chat_template_kwargs,
             enable_thinking: enableThinking,

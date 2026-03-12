@@ -20,6 +20,8 @@ export interface ModelConfig {
   api_key?: string;
   chat_template_kwargs?: Record<string, unknown>;
   context_size: number;
+  think_max_tokens?: number;   // max completion tokens for think mode (default: 1024)
+  think_timeout?: number;      // timeout ms for think mode (default: 600000)
   fallback?: {
     provider: string;
     base_url: string;
