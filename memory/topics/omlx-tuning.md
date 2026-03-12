@@ -14,8 +14,8 @@
 
 | 參數 | 調整前 | 調整後 | 原因 |
 |------|--------|--------|------|
-| `cache.ssd_cache_dir` | `null` | `~/.omlx/cache` | 啟用 SSD KV cache — mushi 每次送類似 system prompt，prefix 復用免重算 |
-| `cache.hot_cache_max_size` | `"0"` | `"20%"` | 記憶體 hot cache，頻繁存取的 KV blocks 保留在記憶體 |
+| ~~`cache.ssd_cache_dir`~~ | `null` | ❌ 回滾 | 設定後 oMLX 無法啟動（v0.2.7 bug？），待查 |
+| ~~`cache.hot_cache_max_size`~~ | `"0"` | ❌ 回滾 | 同上，SSD cache 相關設定一起回滾 |
 | `scheduler.completion_batch_size` | `8` | `32` | 增加 token 生成批次大小，提升吞吐 |
 | `sampling.top_p` | `0.95` | `1.0` | Qwen3.5 官方推薦 non-thinking text: top_p=1.0 |
 | `sampling.top_k` | `0`（無限） | `20` | Qwen3.5 官方推薦 top_k=20 |
