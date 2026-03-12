@@ -686,7 +686,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         ].filter(Boolean).join('\n');
 
         const start = Date.now();
-        const result = await callModelWithThinking(config.model, agentDir, classifyPrompt, input, true);
+        const result = await callModel(config.model, agentDir, classifyPrompt, input, ModelPriority.DECISION);
         const latencyMs = Date.now() - start;
 
         const parsed = parseJsonFromLLM<{ priority?: string; urgent?: boolean; deep?: boolean; reason?: string }>(
@@ -697,7 +697,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         const validPriorities = ['P0', 'P1', 'P2', 'P3'];
         const priority = validPriorities.includes(parsed.priority ?? '') ? parsed.priority! : 'P1';
 
-        log(agentDir, 'classify', `${latencyMs}ms — ${source ?? '?'} → ${priority} [think] urgent=${parsed.urgent ?? false} deep=${parsed.deep ?? true}`);
+        log(agentDir, 'classify', `${latencyMs}ms — ${source ?? '?'} → ${priority} urgent=${parsed.urgent ?? false} deep=${parsed.deep ?? true}`);
         respond(res, 200, {
           ok: true,
           priority,
