@@ -300,6 +300,7 @@ export async function callModel(
     model: modelConfig.model,
     api_key: modelConfig.api_key,
     chat_template_kwargs: modelConfig.chat_template_kwargs,
+    max_tokens: 512,
   };
 
   const label = `fast:${primary.model}`;
