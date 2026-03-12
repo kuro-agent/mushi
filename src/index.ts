@@ -16,7 +16,7 @@ import { parse as parseYaml } from 'yaml';
 import type { AgentConfig, PerceptionSignal, Message } from './types.js';
 import { parseInterval, estimateTokens, truncateToTokens, log, escalateToKuro as sendToKuro } from './utils.js';
 import { perceive, runPlugin } from './perception.js';
-import { callModel } from './model.js';
+import { callModel, initModelQueue } from './model.js';
 import { parseTags, dispatch, initDedupState, saveDedupState } from './dispatcher.js';
 import { startServer } from './server.js';
 import { startRoomWatcher } from './room-watcher.js';
@@ -355,6 +355,7 @@ async function main(): Promise<void> {
 
   loadConversations();
   initDedupState(agentDir);
+  initModelQueue(agentDir);
 
   const port = config.server?.port ?? 3000;
   startServer(port, {

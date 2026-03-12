@@ -7,7 +7,7 @@ import { join, dirname } from 'node:path';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AgentConfig, PerceptionSignal, Message, TriageRequest, LegacyTriageRequest, TriageEventType } from './types.js';
 import { log, parseJsonFromLLM } from './utils.js';
-import { callModel, callModelWithThinking } from './model.js';
+import { callModel, callModelWithThinking, ModelPriority, modelQueue } from './model.js';
 import { getRoomWatcherStatus } from './room-watcher.js';
 
 // =============================================================================
@@ -184,6 +184,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         lastThinkAt: lastThink ? new Date(lastThink).toISOString() : null,
         lastThinkAgo: lastThink ? Math.floor((Date.now() - lastThink) / 1000) : null,
         roomWatcher: getRoomWatcherStatus(),
+        queue: modelQueue.stats(),
       });
       return;
     }
@@ -385,7 +386,7 @@ export function startServer(port: number, deps: ServerDeps): void {
           const msgInput = `Message: ${messageText.slice(0, 500)}`;
 
           const start = Date.now();
-          const result = await callModelWithThinking(config.model, agentDir, dmPrompt, msgInput, true);
+          const result = await callModelWithThinking(config.model, agentDir, dmPrompt, msgInput, true, ModelPriority.INTERACTIVE);
           const latencyMs = Date.now() - start;
 
           const parsed = parseJsonFromLLM<{ action?: string; reason?: string }>(
@@ -494,7 +495,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         ].filter(Boolean).join('\n');
 
         const start = Date.now();
-        const result = await callModel(config.model, agentDir, systemPrompt, `Message from Alex: ${message.slice(0, 500)}`);
+        const result = await callModel(config.model, agentDir, systemPrompt, `Message from Alex: ${message.slice(0, 500)}`, ModelPriority.INTERACTIVE);
         const latencyMs = Date.now() - start;
 
         const reply = result.trim().slice(0, 500);
