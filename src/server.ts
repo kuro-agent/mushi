@@ -666,18 +666,17 @@ export function startServer(port: number, deps: ServerDeps): void {
         // LLM classify for ambiguous cases
         const classifyPrompt = [
           'You classify incoming tasks/messages for an AI agent by priority and urgency.',
+          'Think briefly, then respond with JSON only.',
           '',
-          'Respond with JSON only: {"priority": "P0"|"P1"|"P2"|"P3", "urgent": true/false, "deep": true/false, "reason": "one line"}',
+          'Output format: {"priority": "P0"|"P1"|"P2"|"P3", "urgent": true/false, "deep": true/false, "reason": "one line"}',
           '',
-          'Priority levels:',
-          '- P0: Critical — system down, data loss, security issues',
-          '- P1: Important — user requests, bugs, time-sensitive tasks',
-          '- P2: Normal — scheduled tasks, learning, routine work',
-          '- P3: Low — noise, auto-generated, can be skipped',
+          'P0: Critical — system down, data loss, security',
+          'P1: Important — user requests, bugs, time-sensitive',
+          'P2: Normal — scheduled, learning, routine',
+          'P3: Low — noise, auto-generated',
           '',
-          'urgent: needs response within minutes (not hours)',
-          'deep: needs full thinking cycle (vs quick answer)',
-          (DIRECT_MESSAGE_SOURCES as readonly string[]).includes(sourceLower) ? '\nNote: this is a direct message — lean towards urgent=true' : '',
+          'urgent: needs response within minutes. deep: needs full thinking cycle.',
+          (DIRECT_MESSAGE_SOURCES as readonly string[]).includes(sourceLower) ? 'Note: direct message — lean urgent=true' : '',
         ].filter(Boolean).join('\n');
 
         const input = [

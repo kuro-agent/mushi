@@ -31,6 +31,8 @@ export interface QueueStats {
 
 export interface ModelQueue {
   enqueue<T>(fn: () => Promise<T>, priority: number, label?: string): Promise<T>;
+  /** Try to enqueue — returns null immediately if queue is busy. For non-critical calls that can be skipped. */
+  tryEnqueue<T>(fn: () => Promise<T>, priority: number, label?: string): Promise<T> | null;
   stats(): QueueStats;
 }
 
@@ -84,6 +86,16 @@ class LocalModelQueue implements ModelQueue {
         this.logFn('queue', `+${label} (pending: ${this.queue.length}, p${priority})`);
       }
     });
+  }
+
+  tryEnqueue<T>(fn: () => Promise<T>, priority: number, label = ''): Promise<T> | null {
+    if (this.processing || this.queue.length > 0) {
+      if (this.logFn) {
+        this.logFn('queue', `~${label} skipped (busy, pending: ${this.queue.length})`);
+      }
+      return null;
+    }
+    return this.enqueue(fn, priority, label);
   }
 
   stats(): QueueStats {
@@ -275,6 +287,7 @@ export async function callModel(
   context: string,
   prompt: string,
   priority: number = ModelPriority.BACKGROUND,
+  skipIfBusy = false,
 ): Promise<string> {
   const messages: Message[] = [
     { role: 'system', content: context },
@@ -291,7 +304,7 @@ export async function callModel(
 
   const label = `fast:${primary.model}`;
 
-  return modelQueue.enqueue(async () => {
+  const doCall = async () => {
     log(agentDir, 'model', `calling ${primary.provider}/${primary.model} (context: ~${estimateTokens(context)} tokens)`);
 
     try {
@@ -313,5 +326,16 @@ export async function callModel(
 
       throw err;
     }
-  }, priority, label);
+  };
+
+  if (skipIfBusy) {
+    const result = modelQueue.tryEnqueue(doCall, priority, label);
+    if (result === null) {
+      log(agentDir, 'model', `skipped ${label} (queue busy)`);
+      return '';
+    }
+    return result;
+  }
+
+  return modelQueue.enqueue(doCall, priority, label);
 }

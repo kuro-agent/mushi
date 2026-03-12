@@ -16,7 +16,7 @@ import { parse as parseYaml } from 'yaml';
 import type { AgentConfig, PerceptionSignal, Message } from './types.js';
 import { parseInterval, estimateTokens, truncateToTokens, log, escalateToKuro as sendToKuro } from './utils.js';
 import { perceive, runPlugin } from './perception.js';
-import { callModel, initModelQueue } from './model.js';
+import { callModel, initModelQueue, ModelPriority } from './model.js';
 import { parseTags, dispatch, initDedupState, saveDedupState } from './dispatcher.js';
 import { startServer } from './server.js';
 import { startRoomWatcher } from './room-watcher.js';
@@ -248,12 +248,17 @@ async function think(num: number, signals: PerceptionSignal[]): Promise<void> {
   const modelStart = Date.now();
   let response: string;
   try {
-    response = await callModel(config.model, agentDir, context, prompt);
+    response = await callModel(config.model, agentDir, context, prompt, ModelPriority.BACKGROUND, true);
   } catch (err) {
     log(agentDir, 'error', `model call failed: ${err instanceof Error ? err.message : 'unknown'}`);
     return;
   }
   const modelLatencyMs = Date.now() - modelStart;
+
+  if (!response) {
+    log(agentDir, 'think', `skipped (queue busy, ${modelLatencyMs}ms)`);
+    return;
+  }
 
   conversationHistory.push(
     { role: 'user', content: prompt },
