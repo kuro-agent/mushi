@@ -16,6 +16,7 @@ interface ProviderConfig {
 async function callProvider(
   prov: ProviderConfig,
   messages: Message[],
+  timeoutMs = 30_000,
 ): Promise<string> {
   const { provider, base_url, model, api_key, chat_template_kwargs } = prov;
 
@@ -55,7 +56,7 @@ async function callProvider(
       ...(api_key ? { Authorization: `Bearer ${api_key}` } : {}),
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!response.ok) {
@@ -109,8 +110,10 @@ export async function callModelWithThinking(
   const mode = enableThinking ? 'think' : 'fast';
   log(agentDir, 'model', `calling ${primary.provider}/${primary.model} [${mode}] (context: ~${estimateTokens(context)} tokens)`);
 
+  const timeout = enableThinking ? 90_000 : 30_000;
+
   try {
-    return await callProvider(primary, messages);
+    return await callProvider(primary, messages, timeout);
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : 'unknown';
 
@@ -126,7 +129,7 @@ export async function callModelWithThinking(
           ...fb.chat_template_kwargs,
           enable_thinking: enableThinking,
         },
-      }, messages);
+      }, messages, timeout);
     }
 
     throw err;
