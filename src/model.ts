@@ -110,7 +110,7 @@ export async function callModelWithThinking(
   const mode = enableThinking ? 'think' : 'fast';
   log(agentDir, 'model', `calling ${primary.provider}/${primary.model} [${mode}] (context: ~${estimateTokens(context)} tokens)`);
 
-  const timeout = enableThinking ? 90_000 : 30_000;
+  const timeout = enableThinking ? 600_000 : 30_000;
 
   try {
     return await callProvider(primary, messages, timeout);
