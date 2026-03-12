@@ -145,6 +145,10 @@ interface ProviderConfig {
   api_key?: string;
   chat_template_kwargs?: Record<string, unknown>;
   max_tokens?: number;
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  presence_penalty?: number;
 }
 
 async function callProvider(
@@ -179,6 +183,10 @@ async function callProvider(
       model,
       messages,
       stream: false,
+      temperature: prov.temperature ?? 1.0,
+      top_p: prov.top_p ?? 1.0,
+      top_k: prov.top_k ?? 20,
+      presence_penalty: prov.presence_penalty ?? 2.0,
       ...(max_tokens ? { max_tokens } : {}),
       ...(chat_template_kwargs ? { chat_template_kwargs } : {}),
     };
@@ -243,6 +251,10 @@ export async function callModelWithThinking(
     model: modelConfig.model,
     api_key: modelConfig.api_key,
     max_tokens: thinkMaxTokens,
+    temperature: modelConfig.temperature ?? 1.0,
+    top_p: enableThinking ? (modelConfig.top_p ?? 0.95) : modelConfig.top_p,
+    top_k: modelConfig.top_k,
+    presence_penalty: enableThinking ? (modelConfig.presence_penalty ?? 1.5) : modelConfig.presence_penalty,
     chat_template_kwargs: {
       ...modelConfig.chat_template_kwargs,
       enable_thinking: enableThinking,
@@ -300,7 +312,11 @@ export async function callModel(
     model: modelConfig.model,
     api_key: modelConfig.api_key,
     chat_template_kwargs: modelConfig.chat_template_kwargs,
-    max_tokens: 512,
+    max_tokens: modelConfig.max_tokens ?? 512,
+    temperature: modelConfig.temperature,
+    top_p: modelConfig.top_p,
+    top_k: modelConfig.top_k,
+    presence_penalty: modelConfig.presence_penalty,
   };
 
   const label = `fast:${primary.model}`;

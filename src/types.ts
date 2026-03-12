@@ -22,6 +22,12 @@ export interface ModelConfig {
   context_size: number;
   think_max_tokens?: number;   // max completion tokens for think mode (default: 1024)
   think_timeout?: number;      // timeout ms for think mode (default: 600000)
+  max_tokens?: number;         // max response tokens for non-think mode (default: 512)
+  // Sampling parameters (Qwen3.5 official recommendations)
+  temperature?: number;        // default: 1.0
+  top_p?: number;              // default: 1.0 (non-think) / 0.95 (think)
+  top_k?: number;              // default: 20
+  presence_penalty?: number;   // default: 2.0 (non-think) / 1.5 (think)
   fallback?: {
     provider: string;
     base_url: string;
