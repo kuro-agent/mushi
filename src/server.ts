@@ -7,7 +7,7 @@ import { join, dirname } from 'node:path';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AgentConfig, PerceptionSignal, Message, TriageRequest, LegacyTriageRequest, TriageEventType } from './types.js';
 import { log, parseJsonFromLLM } from './utils.js';
-import { callModel } from './model.js';
+import { callModel, callModelWithThinking } from './model.js';
 import { getRoomWatcherStatus } from './room-watcher.js';
 
 // =============================================================================
@@ -385,7 +385,7 @@ export function startServer(port: number, deps: ServerDeps): void {
           const msgInput = `Message: ${messageText.slice(0, 500)}`;
 
           const start = Date.now();
-          const result = await callModel(config.model, agentDir, dmPrompt, msgInput);
+          const result = await callModelWithThinking(config.model, agentDir, dmPrompt, msgInput, true);
           const latencyMs = Date.now() - start;
 
           const parsed = parseJsonFromLLM<{ action?: string; reason?: string }>(
@@ -396,7 +396,7 @@ export function startServer(port: number, deps: ServerDeps): void {
           // Validate action — only allow quick or wake (fail-safe: wake)
           const action = parsed.action === 'quick' ? 'quick' : 'wake';
 
-          log(agentDir, 'triage', `${latencyMs}ms — DM ${trigger} → ${action}: ${messageText.slice(0, 80)}`);
+          log(agentDir, 'triage', `${latencyMs}ms — DM ${trigger} → ${action} [think]: ${messageText.slice(0, 80)}`);
           trailFromTriage(trigger, source, action, parsed.reason ?? '', 'llm');
           respond(res, 200, { ok: true, action, reason: parsed.reason ?? '', latencyMs, method: 'llm' });
           return;
@@ -686,7 +686,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         ].filter(Boolean).join('\n');
 
         const start = Date.now();
-        const result = await callModel(config.model, agentDir, classifyPrompt, input);
+        const result = await callModelWithThinking(config.model, agentDir, classifyPrompt, input, true);
         const latencyMs = Date.now() - start;
 
         const parsed = parseJsonFromLLM<{ priority?: string; urgent?: boolean; deep?: boolean; reason?: string }>(
@@ -697,7 +697,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         const validPriorities = ['P0', 'P1', 'P2', 'P3'];
         const priority = validPriorities.includes(parsed.priority ?? '') ? parsed.priority! : 'P1';
 
-        log(agentDir, 'classify', `${latencyMs}ms — ${source ?? '?'} → ${priority} urgent=${parsed.urgent ?? false} deep=${parsed.deep ?? true}`);
+        log(agentDir, 'classify', `${latencyMs}ms — ${source ?? '?'} → ${priority} [think] urgent=${parsed.urgent ?? false} deep=${parsed.deep ?? true}`);
         respond(res, 200, {
           ok: true,
           priority,
@@ -864,7 +864,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         ].join('\n');
 
         const start = Date.now();
-        const result = await callModel(config.model, agentDir, routePrompt, input);
+        const result = await callModelWithThinking(config.model, agentDir, routePrompt, input, true);
         const latencyMs = Date.now() - start;
 
         const parsed = parseJsonFromLLM<{ route?: string; perspective?: string; reason?: string }>(
@@ -873,7 +873,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         );
 
         const route = parsed.route === 'spawn' ? 'spawn' : 'queue';
-        log(agentDir, 'route', `${latencyMs}ms — ${route} (${parsed.perspective ?? 'research'}): ${parsed.reason ?? ''}`);
+        log(agentDir, 'route', `${latencyMs}ms — ${route} [think] (${parsed.perspective ?? 'research'}): ${parsed.reason ?? ''}`);
         respond(res, 200, {
           ok: true,
           route,

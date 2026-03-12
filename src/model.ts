@@ -79,6 +79,60 @@ async function callProvider(
   }
 }
 
+/**
+ * Call model with explicit thinking toggle.
+ * Used by endpoints where reasoning quality matters (classify, route, DM triage).
+ */
+export async function callModelWithThinking(
+  modelConfig: ModelConfig,
+  agentDir: string,
+  context: string,
+  prompt: string,
+  enableThinking: boolean,
+): Promise<string> {
+  const messages: Message[] = [
+    { role: 'system', content: context },
+    { role: 'user', content: prompt },
+  ];
+
+  const primary: ProviderConfig = {
+    provider: modelConfig.provider,
+    base_url: modelConfig.base_url,
+    model: modelConfig.model,
+    api_key: modelConfig.api_key,
+    chat_template_kwargs: {
+      ...modelConfig.chat_template_kwargs,
+      enable_thinking: enableThinking,
+    },
+  };
+
+  const mode = enableThinking ? 'think' : 'fast';
+  log(agentDir, 'model', `calling ${primary.provider}/${primary.model} [${mode}] (context: ~${estimateTokens(context)} tokens)`);
+
+  try {
+    return await callProvider(primary, messages);
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : 'unknown';
+
+    if (modelConfig.fallback) {
+      const fb = modelConfig.fallback;
+      log(agentDir, 'model', `${primary.provider} failed (${errMsg}), falling back to ${fb.provider}/${fb.model}`);
+      return await callProvider({
+        provider: fb.provider,
+        base_url: fb.base_url,
+        model: fb.model,
+        api_key: fb.api_key,
+        chat_template_kwargs: {
+          ...fb.chat_template_kwargs,
+          enable_thinking: enableThinking,
+        },
+      }, messages);
+    }
+
+    throw err;
+  }
+}
+
 export async function callModel(
   modelConfig: ModelConfig,
   agentDir: string,
