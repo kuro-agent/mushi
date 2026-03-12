@@ -5,7 +5,7 @@
 ## 硬體環境
 
 - Apple Silicon Mac（統一記憶體架構）
-- oMLX v0.2.7（Homebrew 安裝）
+- oMLX v0.2.8（Homebrew 安裝，2026-03-12 升級）
 - 模型：`Qwen3.5-9B-MLX-4bit`（mlx-community 量化版）
 
 ## oMLX 設定（`~/.omlx/settings.json`）
@@ -14,8 +14,8 @@
 
 | 參數 | 調整前 | 調整後 | 原因 |
 |------|--------|--------|------|
-| ~~`cache.ssd_cache_dir`~~ | `null` | ❌ 回滾 | 設定後 oMLX 無法啟動（v0.2.7 bug？），待查 |
-| ~~`cache.hot_cache_max_size`~~ | `"0"` | ❌ 回滾 | 同上，SSD cache 相關設定一起回滾 |
+| `cache.ssd_cache_dir` | `null` | ✅ CLI flag 啟用 | v0.2.7 直接改 settings.json 會導致啟動失敗；v0.2.8 改用 launchd plist CLI flag `--paged-ssd-cache-dir` 成功 |
+| `cache.hot_cache_max_size` | `"0"` | ✅ `4GB`（CLI flag） | `--hot-cache-max-size 4GB`，RAM 層 prefix cache，加速重複 system prompt |
 | `scheduler.completion_batch_size` | `8` | `32` | 增加 token 生成批次大小，提升吞吐 |
 | `sampling.top_p` | `0.95` | `1.0` | Qwen3.5 官方推薦 non-thinking text: top_p=1.0 |
 | `sampling.top_k` | `0`（無限） | `20` | Qwen3.5 官方推薦 top_k=20 |
@@ -85,6 +85,48 @@ mushi 內建 priority queue（`src/model.ts`）序列化 oMLX 存取：
 - `tryEnqueue`：P2 請求在 queue busy 時直接跳過（防堆積）
 - 所有請求排隊等待 single GPU，按優先級排序
 
+## SSD KV Cache 設定
+
+### 啟用方式
+
+**不要直接改 `~/.omlx/settings.json`**（v0.2.7 會導致啟動失敗）。改用 launchd plist 的 CLI flags：
+
+```
+~/Library/LaunchAgents/homebrew.mxcl.omlx.plist
+```
+
+在 `ProgramArguments` 加入：
+```xml
+<string>--paged-ssd-cache-dir</string>
+<string>/Users/user/.omlx/cache</string>
+<string>--hot-cache-max-size</string>
+<string>4GB</string>
+```
+
+### 重啟方式
+
+**不要用 `brew services restart`**（會覆蓋 plist 回原版）。用：
+```bash
+launchctl unload ~/Library/LaunchAgents/homebrew.mxcl.omlx.plist
+launchctl load ~/Library/LaunchAgents/homebrew.mxcl.omlx.plist
+```
+
+### 運行狀態（2026-03-12）
+
+| 項目 | 值 |
+|------|------|
+| Cache 目錄 | `/Users/user/.omlx/cache` |
+| SSD 已用 | 17.13 GB（307 個快取檔） |
+| SSD 上限 | 46.04 GB |
+| Hot Cache（RAM） | 4 GB |
+| Block Size | 1024 tokens |
+
+### 原理
+
+oMLX 的 Tiered KV Cache：Hot tier（RAM）+ Cold tier（SSD/safetensors）。
+mushi 的 triage/classify 共用相似 system prompt → prefix 可大量復用。
+SSD cache 避免重算已見過的 prefix tokens，Hot cache 把常用 prefix 留在 RAM 進一步加速。
+
 ## 效能基線（調整前）
 
 - 222 次請求 / 4184 秒 generation = 平均 18.8 秒/請求
@@ -96,4 +138,5 @@ mushi 內建 priority queue（`src/model.ts`）序列化 oMLX 存取：
 1. **對比 MLX-8bit vs MLX-4bit**：記憶體夠的話，8bit 精度更高
 2. **Qwen3.5-35B-A3B（MoE）**：active 只有 3B params，速度接近 9B 但能力更強
 3. **Unsloth 微調**：用累積的 triage/classify 歷史資料微調專屬分類模型
-4. **monitor SSD cache hit rate**：確認 prefix 復用生效
+4. **Monitor SSD cache hit rate**：確認 prefix 復用生效（觀察 log 中 `cached_tokens` 欄位）
+5. **oMLX 升級注意**：`brew upgrade omlx` 後需重新用 launchctl 載入自訂 plist
