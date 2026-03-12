@@ -40,19 +40,12 @@ async function callProvider(
     };
   } else {
     url = `${base_url}/v1/chat/completions`;
-<<<<<<< HEAD
-    body = { model, messages, stream: false };
-    if (prov.chat_template_kwargs) {
-      body.chat_template_kwargs = prov.chat_template_kwargs;
-    }
-=======
     body = {
       model,
       messages,
       stream: false,
       ...(chat_template_kwargs ? { chat_template_kwargs } : {}),
     };
->>>>>>> feature/del-1773234710550-me7g
   }
 
   const response = await fetch(url, {
