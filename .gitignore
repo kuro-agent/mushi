@@ -5,3 +5,4 @@ logs/
 agent.production.yaml
 agent.local.yaml
 **/conversations.jsonl
+.forge-in-use

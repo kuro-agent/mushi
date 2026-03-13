@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, writeFileSync, appendFileSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import type { AgentConfig, PerceptionSignal, Message, TriageRequest, LegacyTriageRequest, TriageEventType } from './types.js';
+import type { AgentConfig, PerceptionSignal, Message, TriageRequest, LegacyTriageRequest, TriageEventType, ModelConfig } from './types.js';
 import { log, parseJsonFromLLM } from './utils.js';
 import { callModel, callModelWithThinking, ModelPriority, modelQueue } from './model.js';
 import { getRoomWatcherStatus } from './room-watcher.js';
@@ -67,6 +67,167 @@ function trailFromTriage(trigger: string, source: string | undefined, action: st
 }
 
 const DIRECT_MESSAGE_SOURCES = ['telegram', 'room', 'chat'] as const;
+type TriageProviderMode = 'hc1' | 'omlx' | 'shadow';
+
+function getTriageProviderMode(): TriageProviderMode {
+  const raw = (process.env.MUSHI_TRIAGE_PROVIDER ?? 'shadow').trim().toLowerCase();
+  if (raw === 'hc1' || raw === 'omlx' || raw === 'shadow') return raw;
+  return 'shadow';
+}
+
+function buildOmlxTriageModel(config: AgentConfig): ModelConfig {
+  // Use dedicated triage_model (0.8B) if configured, else fallback to main model
+  if (config.triage_model) return config.triage_model;
+  return {
+    ...config.model,
+    provider: 'openai',
+    base_url: 'http://localhost:8000',
+    model: 'Qwen3.5-0.8B-MLX-4bit',
+    api_key: 'omlx-local',
+    max_tokens: 150,
+    temperature: 0.7,
+    top_p: 0.8,
+  };
+}
+
+interface TriageProviderResult {
+  provider: 'hc1' | 'omlx';
+  output?: string;
+  latencyMs: number;
+  error?: string;
+}
+
+interface ParsedTriageDecision {
+  action: 'skip' | 'quick' | 'wake';
+  reason: string;
+}
+
+function writeTriageTelemetry(agentDir: string, entry: Record<string, unknown>): void {
+  try {
+    const logDir = join(agentDir, 'logs');
+    if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
+    appendFileSync(join(logDir, 'triage-telemetry.jsonl'), JSON.stringify({
+      ts: new Date().toISOString(),
+      ...entry,
+    }) + '\n', 'utf-8');
+  } catch { /* fire-and-forget */ }
+}
+
+function parseTriageDecision(raw: string, allowedActions: readonly string[]): ParsedTriageDecision {
+  const parsed = parseJsonFromLLM<{ action?: string; reason?: string }>(
+    raw,
+    { action: 'wake', reason: 'parse failed — defaulting to wake' },
+  );
+  const action = allowedActions.includes(parsed.action ?? '') ? parsed.action! : 'wake';
+  return { action: action as 'skip' | 'quick' | 'wake', reason: parsed.reason ?? '' };
+}
+
+async function callTriageProvider(
+  provider: 'hc1' | 'omlx',
+  modelConfig: ModelConfig,
+  agentDir: string,
+  systemPrompt: string,
+  input: string,
+  enableThinking: boolean,
+  priority: number,
+): Promise<TriageProviderResult> {
+  const start = Date.now();
+  try {
+    const output = enableThinking
+      ? await callModelWithThinking(modelConfig, agentDir, systemPrompt, input, true, priority)
+      : await callModel(modelConfig, agentDir, systemPrompt, input, priority);
+    return { provider, output, latencyMs: Date.now() - start };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'unknown';
+    return { provider, latencyMs: Date.now() - start, error: msg };
+  }
+}
+
+async function runTriageDecision(
+  config: AgentConfig,
+  agentDir: string,
+  meta: {
+    trigger: string;
+    source?: string;
+    event: string;
+    mode: 'dm' | 'event';
+  },
+  systemPrompt: string,
+  input: string,
+  allowedActions: readonly string[],
+  opts: {
+    enableThinking: boolean;
+    priority: number;
+  },
+): Promise<{ decision: ParsedTriageDecision; latencyMs: number; providerUsed: 'hc1' | 'omlx' }> {
+  const mode = getTriageProviderMode();
+  const hc1Model = config.model;
+  const omlxModel = buildOmlxTriageModel(config);
+
+  if (mode === 'hc1') {
+    const hc1 = await callTriageProvider('hc1', hc1Model, agentDir, systemPrompt, input, opts.enableThinking, opts.priority);
+    if (hc1.error || !hc1.output) {
+      throw new Error(hc1.error ?? 'hc1 empty response');
+    }
+    return {
+      decision: parseTriageDecision(hc1.output, allowedActions),
+      latencyMs: hc1.latencyMs,
+      providerUsed: 'hc1',
+    };
+  }
+
+  if (mode === 'omlx') {
+    const omlx = await callTriageProvider('omlx', omlxModel, agentDir, systemPrompt, input, opts.enableThinking, opts.priority);
+    if (omlx.error || !omlx.output) {
+      throw new Error(omlx.error ?? 'omlx empty response');
+    }
+    return {
+      decision: parseTriageDecision(omlx.output, allowedActions),
+      latencyMs: omlx.latencyMs,
+      providerUsed: 'omlx',
+    };
+  }
+
+  const [hc1, omlx] = await Promise.all([
+    callTriageProvider('hc1', hc1Model, agentDir, systemPrompt, input, opts.enableThinking, opts.priority),
+    callTriageProvider('omlx', omlxModel, agentDir, systemPrompt, input, opts.enableThinking, opts.priority),
+  ]);
+
+  const hc1Decision = hc1.output ? parseTriageDecision(hc1.output, allowedActions) : null;
+  const omlxDecision = omlx.output ? parseTriageDecision(omlx.output, allowedActions) : null;
+
+  writeTriageTelemetry(agentDir, {
+    type: 'triage_shadow',
+    trigger: meta.trigger,
+    source: meta.source,
+    event: meta.event,
+    triageMode: meta.mode,
+    selected: 'hc1',
+    match: hc1Decision && omlxDecision ? hc1Decision.action === omlxDecision.action : null,
+    hc1: {
+      latencyMs: hc1.latencyMs,
+      action: hc1Decision?.action ?? null,
+      reason: hc1Decision?.reason ?? null,
+      error: hc1.error ?? null,
+    },
+    omlx: {
+      latencyMs: omlx.latencyMs,
+      action: omlxDecision?.action ?? null,
+      reason: omlxDecision?.reason ?? null,
+      error: omlx.error ?? null,
+    },
+  });
+
+  if (!hc1Decision) {
+    throw new Error(hc1.error ?? 'hc1 empty response');
+  }
+
+  return {
+    decision: hc1Decision,
+    latencyMs: hc1.latencyMs,
+    providerUsed: 'hc1',
+  };
+}
 
 // --- Request normalization: legacy → generic ---
 
@@ -159,6 +320,8 @@ function respond(res: ServerResponse, status: number, data: unknown): void {
 
 export function startServer(port: number, deps: ServerDeps): void {
   const { config, agentDir, startTime } = deps;
+  // 0.8B for classification tasks (triage/classify/route/continuation)
+  const triageModel = config.triage_model ?? config.model;
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://localhost:${port}`);
@@ -385,21 +548,30 @@ export function startServer(port: number, deps: ServerDeps): void {
 
           const msgInput = `Message: ${messageText.slice(0, 500)}`;
 
-          const start = Date.now();
-          const result = await callModelWithThinking(config.model, agentDir, dmPrompt, msgInput, true, ModelPriority.INTERACTIVE);
-          const latencyMs = Date.now() - start;
-
-          const parsed = parseJsonFromLLM<{ action?: string; reason?: string }>(
-            result,
-            { action: 'wake', reason: 'parse failed — defaulting to wake' },
+          const decisionResult = await runTriageDecision(
+            config,
+            agentDir,
+            {
+              trigger,
+              source,
+              event: norm.event,
+              mode: 'dm',
+            },
+            dmPrompt,
+            msgInput,
+            ['quick', 'wake'] as const,
+            {
+              enableThinking: true,
+              priority: ModelPriority.INTERACTIVE,
+            },
           );
+          const latencyMs = decisionResult.latencyMs;
+          const action = decisionResult.decision.action === 'quick' ? 'quick' : 'wake';
+          const reason = decisionResult.decision.reason;
 
-          // Validate action — only allow quick or wake (fail-safe: wake)
-          const action = parsed.action === 'quick' ? 'quick' : 'wake';
-
-          log(agentDir, 'triage', `${latencyMs}ms — DM ${trigger} → ${action} [think]: ${messageText.slice(0, 80)}`);
-          trailFromTriage(trigger, source, action, parsed.reason ?? '', 'llm');
-          respond(res, 200, { ok: true, action, reason: parsed.reason ?? '', latencyMs, method: 'llm' });
+          log(agentDir, 'triage', `${latencyMs}ms — DM ${trigger} → ${action} [think/${decisionResult.providerUsed}]: ${messageText.slice(0, 80)}`);
+          trailFromTriage(trigger, source, action, reason, 'llm');
+          respond(res, 200, { ok: true, action, reason, latencyMs, method: 'llm' });
           return;
         }
 
@@ -441,22 +613,31 @@ export function startServer(port: number, deps: ServerDeps): void {
           `Context: ${JSON.stringify(norm.context)}`,
         ].filter(Boolean).join('\n');
 
-        const start = Date.now();
-        const result = await callModel(config.model, agentDir, triagePrompt, input);
-        const latencyMs = Date.now() - start;
-
-        const parsed = parseJsonFromLLM<{ action?: string; reason?: string }>(
-          result,
-          { action: 'wake', reason: 'parse failed — defaulting to wake' },
+        const decisionResult = await runTriageDecision(
+          config,
+          agentDir,
+          {
+            trigger,
+            source,
+            event: norm.event,
+            mode: 'event',
+          },
+          triagePrompt,
+          input,
+          ['skip', 'quick', 'wake'] as const,
+          {
+            enableThinking: false,
+            priority: ModelPriority.BACKGROUND,
+          },
         );
 
-        // Validate action — only allow skip, quick, wake
-        const validActions = ['skip', 'quick', 'wake'];
-        const action = validActions.includes(parsed.action ?? '') ? parsed.action! : 'wake';
+        const action = decisionResult.decision.action;
+        const reason = decisionResult.decision.reason;
+        const latencyMs = decisionResult.latencyMs;
 
-        log(agentDir, 'triage', `${latencyMs}ms — ${trigger}/${source ?? '?'} → ${action}`);
-        trailFromTriage(trigger, source, action, parsed.reason ?? '', 'llm');
-        respond(res, 200, { ok: true, action, reason: parsed.reason ?? '', latencyMs, method: 'llm' });
+        log(agentDir, 'triage', `${latencyMs}ms — ${trigger}/${source ?? '?'} → ${action} [${decisionResult.providerUsed}]`);
+        trailFromTriage(trigger, source, action, reason, 'llm');
+        respond(res, 200, { ok: true, action, reason, latencyMs, method: 'llm' });
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'unknown';
         log(agentDir, 'error', `triage failed: ${msg}`);
@@ -686,7 +867,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         ].filter(Boolean).join('\n');
 
         const start = Date.now();
-        const result = await callModel(config.model, agentDir, classifyPrompt, input, ModelPriority.DECISION);
+        const result = await callModel(triageModel, agentDir, classifyPrompt, input, ModelPriority.DECISION);
         const latencyMs = Date.now() - start;
 
         const parsed = parseJsonFromLLM<{ priority?: string; urgent?: boolean; deep?: boolean; reason?: string }>(
@@ -766,7 +947,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         ].filter(Boolean).join('\n');
 
         const start = Date.now();
-        const result = await callModel(config.model, agentDir, continuationPrompt, input);
+        const result = await callModel(triageModel, agentDir, continuationPrompt, input);
         const latencyMs = Date.now() - start;
 
         const parsed = parseJsonFromLLM<{ shouldContinue?: boolean; deep?: boolean; reason?: string }>(
@@ -864,7 +1045,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         ].join('\n');
 
         const start = Date.now();
-        const result = await callModelWithThinking(config.model, agentDir, routePrompt, input, true);
+        const result = await callModelWithThinking(triageModel, agentDir, routePrompt, input, false);
         const latencyMs = Date.now() - start;
 
         const parsed = parseJsonFromLLM<{ route?: string; perspective?: string; reason?: string }>(

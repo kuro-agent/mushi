@@ -68,8 +68,30 @@ export function escalateToKuro(text: string, agentDir: string): void {
 
 export function parseJsonFromLLM<T>(result: string, fallback: T): T {
   try {
+    // Try complete JSON first
     const jsonMatch = result.match(/\{[\s\S]*\}/);
-    return jsonMatch ? JSON.parse(jsonMatch[0]) as T : fallback;
+    if (jsonMatch) return JSON.parse(jsonMatch[0]) as T;
+
+    // Repair truncated JSON: 0.8B models often omit the closing }
+    const openBrace = result.indexOf('{');
+    if (openBrace >= 0) {
+      let candidate = result.slice(openBrace).trim();
+      // Count unbalanced braces
+      let depth = 0;
+      for (const ch of candidate) {
+        if (ch === '{') depth++;
+        else if (ch === '}') depth--;
+      }
+      // Append missing closing braces
+      if (depth > 0) {
+        // Also close any unclosed string (trailing quote)
+        if (candidate.match(/[^"\\]"[^"]*$/)) candidate += '"';
+        candidate += '}'.repeat(depth);
+        return JSON.parse(candidate) as T;
+      }
+    }
+
+    return fallback;
   } catch {
     return fallback;
   }

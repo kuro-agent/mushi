@@ -6,6 +6,7 @@ export interface AgentConfig {
   name: string;
   soul: string;
   model: ModelConfig;
+  triage_model?: ModelConfig;
   loop: LoopConfig;
   perception: PerceptionPlugin[];
   context: ContextBudget;
