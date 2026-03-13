@@ -75,7 +75,7 @@ export function parseJsonFromLLM<T>(result: string, fallback: T): T {
     // Repair truncated JSON: 0.8B models often omit the closing }
     const openBrace = result.indexOf('{');
     if (openBrace >= 0) {
-      let candidate = result.slice(openBrace).trim();
+      const candidate = result.slice(openBrace).trim();
       // Count unbalanced braces
       let depth = 0;
       for (const ch of candidate) {
@@ -84,10 +84,11 @@ export function parseJsonFromLLM<T>(result: string, fallback: T): T {
       }
       // Append missing closing braces
       if (depth > 0) {
-        // Also close any unclosed string (trailing quote)
-        if (candidate.match(/[^"\\]"[^"]*$/)) candidate += '"';
-        candidate += '}'.repeat(depth);
-        return JSON.parse(candidate) as T;
+        const braces = '}'.repeat(depth);
+        // Try adding just braces first (most common: value string is closed)
+        try { return JSON.parse(candidate + braces) as T; } catch { /* try with quote */ }
+        // If that fails, try closing an unclosed string first
+        try { return JSON.parse(candidate + '"' + braces) as T; } catch { /* fall through */ }
       }
     }
 
