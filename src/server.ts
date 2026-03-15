@@ -68,6 +68,48 @@ function trailFromTriage(trigger: string, source: string | undefined, action: st
 
 const DIRECT_MESSAGE_SOURCES = ['telegram', 'room', 'chat'] as const;
 type TriageProviderMode = 'hc1' | 'omlx' | 'shadow';
+type TriageAction = 'skip' | 'quick' | 'wake' | 'invalid';
+type TriageMethod = 'rule' | 'llm' | 'error' | 'validation';
+
+interface TriageRuleCounter {
+  rule: string;
+  count: number;
+  lastHitAt: number;
+  actionCounts: Record<TriageAction, number>;
+  methodCounts: Record<TriageMethod, number>;
+}
+
+const triageRuleCounters = new Map<string, TriageRuleCounter>();
+let triageRuleTotalHits = 0;
+
+function recordTriageRuleHit(rule: string, action: TriageAction, method: TriageMethod): void {
+  const existing = triageRuleCounters.get(rule);
+  if (existing) {
+    existing.count += 1;
+    existing.lastHitAt = Date.now();
+    existing.actionCounts[action] += 1;
+    existing.methodCounts[method] += 1;
+  } else {
+    triageRuleCounters.set(rule, {
+      rule,
+      count: 1,
+      lastHitAt: Date.now(),
+      actionCounts: {
+        skip: action === 'skip' ? 1 : 0,
+        quick: action === 'quick' ? 1 : 0,
+        wake: action === 'wake' ? 1 : 0,
+        invalid: action === 'invalid' ? 1 : 0,
+      },
+      methodCounts: {
+        rule: method === 'rule' ? 1 : 0,
+        llm: method === 'llm' ? 1 : 0,
+        error: method === 'error' ? 1 : 0,
+        validation: method === 'validation' ? 1 : 0,
+      },
+    });
+  }
+  triageRuleTotalHits += 1;
+}
 
 function getTriageProviderMode(): TriageProviderMode {
   const raw = (process.env.MUSHI_TRIAGE_PROVIDER ?? 'shadow').trim().toLowerCase();
@@ -352,6 +394,27 @@ export function startServer(port: number, deps: ServerDeps): void {
       return;
     }
 
+    if (req.method === 'GET' && url.pathname === '/health/triage-rules') {
+      const rules = [...triageRuleCounters.values()]
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 20)
+        .map((item) => ({
+          rule: item.rule,
+          count: item.count,
+          lastHitAt: new Date(item.lastHitAt).toISOString(),
+          actionCounts: item.actionCounts,
+          methodCounts: item.methodCounts,
+        }));
+
+      respond(res, 200, {
+        ok: true,
+        totalHits: triageRuleTotalHits,
+        uniqueRules: triageRuleCounters.size,
+        rules,
+      });
+      return;
+    }
+
     if (req.method === 'GET' && url.pathname === '/api/status') {
       const cache = deps.getPerceptionCache();
       respond(res, 200, {
@@ -427,6 +490,7 @@ export function startServer(port: number, deps: ServerDeps): void {
 
         // Validate: need at least an event type
         if (!norm.event) {
+          recordTriageRuleHit('validation_missing_event', 'invalid', 'validation');
           respond(res, 400, { error: 'event type is required (or legacy: trigger)' });
           return;
         }
@@ -452,6 +516,7 @@ export function startServer(port: number, deps: ServerDeps): void {
             });
             if (matches) {
               trailFromTriage(trigger, source, rule.action, rule.reason, 'rule');
+              recordTriageRuleHit(`user_rule:${rule.action}:${rule.reason.slice(0, 80)}`, rule.action, 'rule');
               respond(res, 200, { ok: true, action: rule.action, reason: rule.reason, latencyMs: 0, method: 'rule' });
               return;
             }
@@ -463,6 +528,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         // Alert/startup always wake
         if (norm.event === 'alert' || norm.event === 'startup') {
           trailFromTriage(trigger, source, 'wake', `${norm.event} always wakes`, 'rule');
+          recordTriageRuleHit(`event_${norm.event}_always_wake`, 'wake', 'rule');
           respond(res, 200, { ok: true, action: 'wake', reason: `${norm.event} always wakes`, latencyMs: 0, method: 'rule' });
           return;
         }
@@ -470,6 +536,7 @@ export function startServer(port: number, deps: ServerDeps): void {
         // Legacy compat: mobile always wake
         if (trigger === 'mobile') {
           trailFromTriage(trigger, source, 'wake', 'mobile always wakes', 'rule');
+          recordTriageRuleHit('legacy_mobile_always_wake', 'wake', 'rule');
           respond(res, 200, { ok: true, action: 'wake', reason: 'mobile always wakes', latencyMs: 0, method: 'rule' });
           return;
         }
@@ -483,6 +550,7 @@ export function startServer(port: number, deps: ServerDeps): void {
             const reason = `scheduled heartbeat redundant — last active ${idleSeconds}s ago`;
             log(agentDir, 'triage', `0ms — scheduled/heartbeat → skip (rule: ${reason})`);
             trailFromTriage(trigger, source, 'skip', reason, 'rule');
+            recordTriageRuleHit('scheduled_heartbeat_recently_active_skip', 'skip', 'rule');
             respond(res, 200, { ok: true, action: 'skip', reason, latencyMs: 0, method: 'rule' });
             return;
           }
@@ -497,6 +565,7 @@ export function startServer(port: number, deps: ServerDeps): void {
           const reason = `avoidance override — active patterns: ${avoidancePatterns.join(', ')}`;
           log(agentDir, 'triage', `0ms — timer → wake (rule: ${reason})`);
           trailFromTriage(trigger, source, 'wake', reason, 'rule');
+          recordTriageRuleHit('timer_avoidance_override_wake', 'wake', 'rule');
           respond(res, 200, { ok: true, action: 'wake', reason, latencyMs: 0, method: 'rule' });
           return;
         }
@@ -506,6 +575,7 @@ export function startServer(port: number, deps: ServerDeps): void {
           const reason = `timer skip — idle=${idleSeconds}s < 5min, changes=${changesCount} <= 1`;
           log(agentDir, 'triage', `0ms — timer → skip (rule: ${reason})`);
           trailFromTriage(trigger, source, 'skip', reason, 'rule');
+          recordTriageRuleHit('timer_recent_active_low_change_skip', 'skip', 'rule');
           respond(res, 200, { ok: true, action: 'skip', reason, latencyMs: 0, method: 'rule' });
           return;
         }
@@ -519,6 +589,7 @@ export function startServer(port: number, deps: ServerDeps): void {
           // No message text → can't classify, default to wake
           if (!messageText) {
             trailFromTriage(trigger, source, 'wake', 'direct message without text — defaulting to wake', 'rule');
+            recordTriageRuleHit('direct_message_missing_text_default_wake', 'wake', 'rule');
             respond(res, 200, { ok: true, action: 'wake', reason: 'direct message without text — defaulting to wake', latencyMs: 0, method: 'rule' });
             return;
           }
@@ -571,6 +642,7 @@ export function startServer(port: number, deps: ServerDeps): void {
 
           log(agentDir, 'triage', `${latencyMs}ms — DM ${trigger} → ${action} [think/${decisionResult.providerUsed}]: ${messageText.slice(0, 80)}`);
           trailFromTriage(trigger, source, action, reason, 'llm');
+          recordTriageRuleHit('direct_message_llm_decision', action, 'llm');
           respond(res, 200, { ok: true, action, reason, latencyMs, method: 'llm' });
           return;
         }
@@ -637,12 +709,14 @@ export function startServer(port: number, deps: ServerDeps): void {
 
         log(agentDir, 'triage', `${latencyMs}ms — ${trigger}/${source ?? '?'} → ${action} [${decisionResult.providerUsed}]`);
         trailFromTriage(trigger, source, action, reason, 'llm');
+        recordTriageRuleHit('event_llm_decision', action, 'llm');
         respond(res, 200, { ok: true, action, reason, latencyMs, method: 'llm' });
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'unknown';
         log(agentDir, 'error', `triage failed: ${msg}`);
         // On error, always wake (fail-open)
         // trail not written in catch — trigger/source may not be parsed
+        recordTriageRuleHit('triage_error_fail_open_wake', 'wake', 'error');
         respond(res, 200, { ok: true, action: 'wake', reason: `triage error: ${msg}`, latencyMs: 0, method: 'error' });
       }
       return;
