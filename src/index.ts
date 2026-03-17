@@ -325,13 +325,16 @@ function checkAutoEscalate(signals: PerceptionSignal[]): void {
   const status = statusMatch?.[1] ?? 'unknown';
 
   // Escalate on status transition (skip first read)
+  // Debounce by subject (kuro-status) not by exact message — prevents
+  // OFFLINE→online→unknown→online flapping from generating N notifications
   if (lastKuroStatus && lastKuroStatus !== status) {
     const msg = `Kuro status changed: ${lastKuroStatus} → ${status}`;
+    const dedupKey = 'kuro-status-change'; // single key for all status transitions
     const now = Date.now();
-    const lastSent = autoEscalateDedup.get(msg);
+    const lastSent = autoEscalateDedup.get(dedupKey);
     if (!lastSent || now - lastSent >= AUTO_ESCALATE_DEDUP_WINDOW) {
       escalateToKuro(msg);
-      autoEscalateDedup.set(msg, now);
+      autoEscalateDedup.set(dedupKey, now);
       // Clean old entries
       for (const [k, v] of autoEscalateDedup) {
         if (now - v > AUTO_ESCALATE_DEDUP_WINDOW) autoEscalateDedup.delete(k);
