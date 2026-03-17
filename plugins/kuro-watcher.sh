@@ -7,10 +7,17 @@ MINI_DIR="/Users/user/Workspace/mini-agent"
 
 # --- Kuro Health ---
 echo "=== Kuro Health ==="
-health=$(curl -sf "$KURO_URL/health" --connect-timeout 2 2>/dev/null)
+# Retry up to 3 times with generous timeout — Kuro's event loop may be
+# blocked by heavy Claude CLI work. A single timeout is not OFFLINE.
+health=""
+for attempt in 1 2 3; do
+  health=$(curl -sf "$KURO_URL/health" --connect-timeout 5 --max-time 10 2>/dev/null)
+  [ -n "$health" ] && break
+  [ "$attempt" -lt 3 ] && sleep 2
+done
 if [ -z "$health" ]; then
   echo "STATUS: OFFLINE"
-  echo "mini-agent not responding at $KURO_URL"
+  echo "mini-agent not responding at $KURO_URL (3 attempts failed)"
 else
   echo "STATUS: online"
   node -e "
@@ -20,7 +27,7 @@ else
 fi
 
 # --- Kuro Loop Status ---
-status=$(curl -sf "$KURO_URL/status" --connect-timeout 2 2>/dev/null)
+status=$(curl -sf "$KURO_URL/status" --connect-timeout 5 --max-time 10 2>/dev/null)
 if [ -n "$status" ]; then
   node -e "
     const d = JSON.parse(process.argv[1]);
